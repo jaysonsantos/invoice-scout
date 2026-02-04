@@ -173,3 +173,72 @@ Key dependencies (from pyproject.toml):
 - Renovate: `renovate.json` groups patch/minor updates and auto-merges when checks pass
 
 Never add new dependencies without updating pyproject.toml and running `uv sync`.
+
+## Git Commit Guidelines
+
+### Semantic Commits
+All commits must follow semantic commit convention: `type(scope): description`
+
+**Types:**
+- `feat`: New feature
+- `fix`: Bug fix
+- `refactor`: Code refactoring without functional changes
+- `style`: Code style changes (formatting, missing semicolons, etc.)
+- `docs`: Documentation changes
+- `test`: Adding or updating tests
+- `chore`: Maintenance tasks, dependency updates
+- `perf`: Performance improvements
+- `ci`: CI/CD configuration changes
+
+**Scopes:**
+- `deps`: Dependency-related changes
+- `ci`: CI/CD changes
+- `docs`: Documentation
+- `auth`: Authentication-related
+- `drive`: Google Drive integration
+- `sheets`: Google Sheets integration
+- `openrouter`: LLM service integration
+- `cli`: Command-line interface
+- `config`: Configuration management
+
+### Imperative Language
+Commit messages must use imperative mood (command form):
+
+**Good:**
+- `feat(auth): add OAuth2 token refresh logic`
+- `fix(drive): resolve PDF parsing timeout`
+- `refactor(sheets): extract duplicate validation logic`
+- `docs(readme): update installation instructions`
+
+**Bad:**
+- `feat(auth): added OAuth2 token refresh logic`
+- `fix(drive): fixed PDF parsing timeout`
+- `refactor(sheets): refactored duplicate validation logic`
+- `docs(readme): updated installation instructions`
+
+### Commit Message Structure
+```
+type(scope): imperative description
+
+Optional detailed explanation with bullet points:
+- Reason for the change
+- Approach taken
+- Any breaking changes
+```
+
+Examples:
+```
+feat(openrouter): add invoice data extraction service
+
+- Implement OpenRouter API integration
+- Add PDF content parsing
+- Support multiple invoice fields extraction
+```
+
+```
+fix(deps): resolve uv dependency conflict
+
+- Update pyproject.toml with compatible versions
+- Remove conflicting package constraints
+- Test with uv sync
+```
