@@ -26,12 +26,6 @@ jobs:
       - name: Build the devenv shell and run checks
         run: devenv test
 
-      - name: Lint
-        run: devenv shell uv run ruff check invoice_scanner tests
-
-      - name: Format check
-        run: devenv shell uv run ruff format --check invoice_scanner tests
-
       - name: Run tests with coverage
         run: devenv shell uv run pytest tests/ -v --cov=invoice_scanner --cov-report=xml
 
