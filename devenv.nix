@@ -15,6 +15,7 @@
   # https://devenv.sh/packages/
   packages = [
     pkgs.git
+    pkgs.uv
   ];
 
   git-hooks.hooks = {
