@@ -2,19 +2,20 @@
 
 import json
 import os
-from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
-from dotenv import load_dotenv
+from pydantic import BaseModel
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+load_dotenv = __import__("dotenv").load_dotenv
 
 load_dotenv()
 
 STATE_FILE = Path.home() / ".invoice_scanner_state.json"
 
 
-@dataclass
-class InvoiceData:
+class InvoiceData(BaseModel):
     """Data structure for extracted invoice information."""
 
     file_id: str
@@ -31,8 +32,7 @@ class InvoiceData:
     language: str = "unknown"
 
 
-@dataclass
-class State:
+class State(BaseModel):
     """Application state that persists between runs."""
 
     drive_folder_id: str | None = None
@@ -47,7 +47,7 @@ class State:
     token_expiry: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        return self.model_dump()
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "State":
@@ -71,18 +71,35 @@ class State:
         return cls()
 
 
+class AppSettings(BaseSettings):
+    """Application settings from environment variables."""
+
+    model_config = SettingsConfigDict(
+        extra="ignore",
+    )
+
+    google_credentials_path: str = "credentials.json"
+    drive_folder_id: str = ""
+    spreadsheet_id: str = ""
+    sheet_name: str = "Invoices"
+
+
 class Config:
     """Configuration management."""
 
     def __init__(self, state: State):
-        self.google_credentials_path = os.getenv(
-            "GOOGLE_CREDENTIALS_PATH", "credentials.json"
-        )
-        self.openrouter_api_key = os.getenv("OPENROUTER_API_KEY", "")
+        self.app_settings = AppSettings()
 
-        self.drive_folder_id = state.drive_folder_id or os.getenv("DRIVE_FOLDER_ID", "")
-        self.spreadsheet_id = state.spreadsheet_id or os.getenv("SPREADSHEET_ID", "")
-        self.sheet_name = state.sheet_name or os.getenv("SHEET_NAME", "Invoices")
+        self.google_credentials_path: str = os.getenv(
+            "GOOGLE_CREDENTIALS_PATH", self.app_settings.google_credentials_path
+        )
+        self.openrouter_api_key: str = os.getenv("OPENROUTER_API_KEY", "")
+
+        self.drive_folder_id = (
+            state.drive_folder_id or self.app_settings.drive_folder_id
+        )
+        self.spreadsheet_id = state.spreadsheet_id or self.app_settings.spreadsheet_id
+        self.sheet_name = state.sheet_name or self.app_settings.sheet_name
         self.state = state
 
         self.oauth2_client_config = self._load_oauth2_config()

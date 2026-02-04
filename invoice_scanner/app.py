@@ -2,7 +2,8 @@
 
 import argparse
 import logging
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor as PoolExecutor
+from concurrent.futures import as_completed
 from datetime import datetime
 
 from google.oauth2.credentials import Credentials
@@ -50,8 +51,8 @@ class InvoiceProcessor:
                 language=extracted.get("language", "unknown"),
             )
             return invoice
-        except Exception as e:
-            logger.error(f"Failed to process {file_info['name']}: {e}")
+        except Exception:
+            logger.exception(f"Failed to process {file_info['name']}")
             return None
 
     def run(self) -> None:
@@ -70,7 +71,7 @@ class InvoiceProcessor:
         processed_count = 0
         total_value = 0.0
 
-        with ThreadPoolExecutor(max_workers=5) as executor:
+        with PoolExecutor(max_workers=5) as executor:
             futures = {
                 executor.submit(self._process_file, file_info): file_info
                 for file_info in new_files
@@ -94,8 +95,8 @@ class InvoiceProcessor:
                         pass
 
                     logger.info(f"Successfully processed: {file_info['name']}")
-                except Exception as e:
-                    logger.error(f"Failed to append invoice {file_info['name']}: {e}")
+                except Exception:
+                    logger.exception(f"Failed to append invoice {file_info['name']}")
 
         state = self.config.state
         state.last_run = datetime.now().isoformat()
@@ -149,7 +150,17 @@ Examples:
         help="Command to run (default: scan)",
     )
 
+    parser.add_argument(
+        "-v",
+        "--verbose",
+        action="store_true",
+        help="Enable DEBUG level logging",
+    )
+
     args = parser.parse_args()
+
+    log_level = logging.DEBUG if args.verbose else logging.INFO
+    logging.basicConfig(level=log_level)
     state = State.load()
 
     if args.command == "reset":
