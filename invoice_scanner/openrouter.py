@@ -90,7 +90,9 @@ Important:
 
         content = None
         try:
-            response = requests.post(self.API_URL, headers=self.headers, json=payload, timeout=120)
+            response = requests.post(
+                self.API_URL, headers=self.headers, json=payload, timeout=120
+            )
             response.raise_for_status()
 
             result = response.json()

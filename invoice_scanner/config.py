@@ -75,7 +75,9 @@ class Config:
     """Configuration management."""
 
     def __init__(self, state: State):
-        self.google_credentials_path = os.getenv("GOOGLE_CREDENTIALS_PATH", "credentials.json")
+        self.google_credentials_path = os.getenv(
+            "GOOGLE_CREDENTIALS_PATH", "credentials.json"
+        )
         self.openrouter_api_key = os.getenv("OPENROUTER_API_KEY", "")
 
         self.drive_folder_id = state.drive_folder_id or os.getenv("DRIVE_FOLDER_ID", "")

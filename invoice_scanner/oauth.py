@@ -92,7 +92,9 @@ class OAuth2Manager:
         self.auth_uri = self.client_config.get(
             "auth_uri", "https://accounts.google.com/o/oauth2/auth"
         )
-        self.token_uri = self.client_config.get("token_uri", "https://oauth2.googleapis.com/token")
+        self.token_uri = self.client_config.get(
+            "token_uri", "https://oauth2.googleapis.com/token"
+        )
 
     def authenticate(self) -> Credentials | None:
         """Authenticate and return credentials, using refresh token if available."""
@@ -159,7 +161,9 @@ class OAuth2Manager:
             auth_event.wait(1.0)
 
         if OAuth2CallbackHandler.auth_error:
-            raise ValueError(f"Authorization failed: {OAuth2CallbackHandler.auth_error}")
+            raise ValueError(
+                f"Authorization failed: {OAuth2CallbackHandler.auth_error}"
+            )
 
         server.shutdown()
         sys.stdout.flush()

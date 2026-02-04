@@ -25,7 +25,9 @@ def interactive_folder_selection(drive_service: GoogleDriveService) -> tuple | N
         print(f"{i:<4} {folder['name'][:38]:<40} {folder['modified'][:25]:<25}")
 
     if len(folders) > 50:
-        print(f"\n... and {len(folders) - 50} more folders (use search in Google Drive)")
+        print(
+            f"\n... and {len(folders) - 50} more folders (use search in Google Drive)"
+        )
 
     print("\nOptions:")
     print(f"  [1-{min(len(folders), 50)}] Select folder by number")
@@ -141,7 +143,9 @@ def interactive_sheet_selection(credentials: Credentials) -> tuple | None:
                 try:
                     sheets_service = build("sheets", "v4", credentials=credentials)
                     spreadsheet = {"properties": {"title": name}}
-                    result = sheets_service.spreadsheets().create(body=spreadsheet).execute()
+                    result = (
+                        sheets_service.spreadsheets().create(body=spreadsheet).execute()
+                    )
                     spreadsheet_id = result["spreadsheetId"]
                     print(f"✅ Created new spreadsheet: {name}")
                     print(f"   ID: {spreadsheet_id}")
@@ -156,7 +160,9 @@ def interactive_sheet_selection(credentials: Credentials) -> tuple | None:
                 try:
                     sheets_service = build("sheets", "v4", credentials=credentials)
                     result = (
-                        sheets_service.spreadsheets().get(spreadsheetId=spreadsheet_id).execute()
+                        sheets_service.spreadsheets()
+                        .get(spreadsheetId=spreadsheet_id)
+                        .execute()
                     )
                     name = result.get("properties", {}).get("title", "Unknown")
                     return (spreadsheet_id, name)

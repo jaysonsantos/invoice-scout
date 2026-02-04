@@ -32,12 +32,18 @@ class GoogleSheetsService:
 
     def _ensure_sheet_exists(self, sheet_name: str) -> None:
         """Ensure the sheet exists, create it if not."""
-        spreadsheet = self.service.spreadsheets().get(spreadsheetId=self.spreadsheet_id).execute()
+        spreadsheet = (
+            self.service.spreadsheets().get(spreadsheetId=self.spreadsheet_id).execute()
+        )
         sheets = spreadsheet.get("sheets", [])
-        sheet_exists = any(sheet["properties"]["title"] == sheet_name for sheet in sheets)
+        sheet_exists = any(
+            sheet["properties"]["title"] == sheet_name for sheet in sheets
+        )
 
         if not sheet_exists:
-            batch_update_body = {"requests": [{"addSheet": {"properties": {"title": sheet_name}}}]}
+            batch_update_body = {
+                "requests": [{"addSheet": {"properties": {"title": sheet_name}}}]
+            }
             self.service.spreadsheets().batchUpdate(
                 spreadsheetId=self.spreadsheet_id, body=batch_update_body
             ).execute()
@@ -64,7 +70,9 @@ class GoogleSheetsService:
     def get_processed_file_ids(self) -> set:
         """Get set of already processed file IDs from all year sheets."""
         all_file_ids = set()
-        spreadsheet = self.service.spreadsheets().get(spreadsheetId=self.spreadsheet_id).execute()
+        spreadsheet = (
+            self.service.spreadsheets().get(spreadsheetId=self.spreadsheet_id).execute()
+        )
         sheets = spreadsheet.get("sheets", [])
 
         invoice_sheets = []
