@@ -118,6 +118,7 @@ def extract_invoice_data(self, pdf_content: bytes, file_name: str) -> dict:
 - Log errors with `logger.error()` before raising
 - Use `raise ... from e` for exception chaining
 - Return standardized error responses for recoverable failures
+- Keep `try/except` blocks tight and focused on a single operation; prefer helper methods to isolate I/O and API error handling
 
 ```python
 try:
@@ -143,6 +144,8 @@ except Exception as e:
 ## Architecture Notes
 
 - **Package layout**: `invoice_scanner/` contains app, config, oauth, drive, sheets, openrouter, cli
+- **Shared utilities**: `invoice_scanner/utils.py` holds helpers like JSON fence stripping and sheet-name/year derivation; reuse these instead of duplicating logic
+- **Google API clients**: `invoice_scanner/google_api.py` centralizes Drive/Sheets client creation; prefer these helpers over direct `build(...)` calls
 - **Entry point**: `main.py` is a thin wrapper that calls `invoice_scanner.app.main`
 - **State management**: Stored in `~/.invoice_scanner_state.json`
 - **Authentication**: OAuth2 flow with local HTTP server callback
