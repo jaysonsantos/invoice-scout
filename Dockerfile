@@ -3,13 +3,13 @@ FROM python:3.11-alpine AS builder
 WORKDIR /app
 
 RUN apk add --no-cache build-base libffi-dev
+RUN pip install --no-cache-dir uv
 
 COPY pyproject.toml uv.lock README.md /app/
-COPY invoice_scanner /app/invoice_scanner
 
-RUN pip install --no-cache-dir uv \
-    && uv sync --frozen --no-dev \
-    && python -m compileall -q /app/invoice_scanner
+RUN uv sync --frozen --no-dev
+COPY invoice_scanner /app/invoice_scanner
+RUN python -m compileall -q /app/invoice_scanner
 
 FROM python:3.11-alpine
 
@@ -23,4 +23,4 @@ ENV PYTHONUNBUFFERED=1
 
 USER app
 
-ENTRYPOINT ["python", "-m", "invoice_scanner"]
+ENTRYPOINT [".venv/bin/python", "-m", "invoice_scanner"]
