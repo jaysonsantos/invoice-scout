@@ -3,9 +3,10 @@
 import re
 
 from google.oauth2.credentials import Credentials
-from googleapiclient.discovery import build
 
 from .config import InvoiceExtract
+from .google_api import build_sheets_service
+from .utils import sheet_name_for_date
 
 
 class GoogleSheetsService:
@@ -28,7 +29,7 @@ class GoogleSheetsService:
 
     def __init__(self, credentials: Credentials, spreadsheet_id: str):
         self.spreadsheet_id = spreadsheet_id
-        self.service = build("sheets", "v4", credentials=credentials)
+        self.service = build_sheets_service(credentials)
 
     def _ensure_sheet_exists(self, sheet_name: str) -> None:
         """Ensure the sheet exists, create it if not."""
@@ -95,11 +96,7 @@ class GoogleSheetsService:
 
     def append_invoice(self, invoice: InvoiceExtract, invoice_date: str) -> None:
         """Append invoice data to the appropriate year-specific sheet."""
-        year = "Unknown"
-        if invoice_date and len(invoice_date) >= 4 and invoice_date[:4].isdigit():
-            year = invoice_date[:4]
-
-        sheet_name = f"Invoices {year}" if year != "Unknown" else "Invoices Unknown"
+        sheet_name = sheet_name_for_date(invoice_date)
         self._ensure_headers(sheet_name)
 
         row = [

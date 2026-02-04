@@ -1,11 +1,62 @@
 """Interactive CLI helpers for setup and status."""
 
+import logging
+
 from google.oauth2.credentials import Credentials
-from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
 
 from .config import STATE_FILE, Config, State
 from .drive import GoogleDriveService
+from .google_api import build_drive_service, build_sheets_service
 from .oauth import OAuth2Manager
+
+logger = logging.getLogger(__name__)
+
+
+def _list_spreadsheet_page(
+    drive_service, page_token: str | None
+) -> dict[str, list[dict[str, str]] | str | None] | None:
+    """Fetch a single page of spreadsheets from Drive."""
+    try:
+        return (
+            drive_service.files()
+            .list(
+                q="mimeType='application/vnd.google-apps.spreadsheet' and trashed=false",
+                pageSize=100,
+                fields="nextPageToken, files(id, name, modifiedTime)",
+                pageToken=page_token,
+                orderBy="name",
+            )
+            .execute()
+        )
+    except HttpError as e:
+        logger.error(f"Failed to list spreadsheets: {e}")
+        return None
+
+
+def _create_spreadsheet(credentials: Credentials, name: str) -> tuple[str, str] | None:
+    """Create a new spreadsheet and return (id, name)."""
+    try:
+        sheets_service = build_sheets_service(credentials)
+        spreadsheet = {"properties": {"title": name}}
+        result = sheets_service.spreadsheets().create(body=spreadsheet).execute()
+        return result["spreadsheetId"], name
+    except HttpError as e:
+        print(f"❌ Failed to create spreadsheet: {e}")
+        return None
+
+
+def _get_spreadsheet_name(credentials: Credentials, spreadsheet_id: str) -> str | None:
+    """Fetch a spreadsheet name from its ID."""
+    try:
+        sheets_service = build_sheets_service(credentials)
+        result = (
+            sheets_service.spreadsheets().get(spreadsheetId=spreadsheet_id).execute()
+        )
+    except HttpError as e:
+        print(f"❌ Could not access spreadsheet: {e}")
+        return None
+    return result.get("properties", {}).get("title", "Unknown")
 
 
 def interactive_folder_selection(drive_service: GoogleDriveService) -> tuple | None:
@@ -77,38 +128,27 @@ def interactive_sheet_selection(credentials: Credentials) -> tuple | None:
     """Interactive Google Sheet selection."""
     print("\n📊 Fetching accessible spreadsheets from Google Drive...")
 
-    drive_service = build("drive", "v3", credentials=credentials)
+    drive_service = build_drive_service(credentials)
 
     spreadsheets = []
     page_token = None
 
     while True:
-        try:
-            results = (
-                drive_service.files()
-                .list(
-                    q="mimeType='application/vnd.google-apps.spreadsheet' and trashed=false",
-                    pageSize=100,
-                    fields="nextPageToken, files(id, name, modifiedTime)",
-                    pageToken=page_token,
-                    orderBy="name",
-                )
-                .execute()
+        results = _list_spreadsheet_page(drive_service, page_token)
+        if results is None:
+            break
+
+        for sheet in results.get("files", []):
+            spreadsheets.append(
+                {
+                    "id": sheet["id"],
+                    "name": sheet["name"],
+                    "modified": sheet.get("modifiedTime", "unknown"),
+                }
             )
 
-            for sheet in results.get("files", []):
-                spreadsheets.append(
-                    {
-                        "id": sheet["id"],
-                        "name": sheet["name"],
-                        "modified": sheet.get("modifiedTime", "unknown"),
-                    }
-                )
-
-            page_token = results.get("nextPageToken")
-            if not page_token:
-                break
-        except Exception:
+        page_token = results.get("nextPageToken")
+        if not page_token:
             break
 
     if not spreadsheets:
@@ -140,34 +180,20 @@ def interactive_sheet_selection(credentials: Credentials) -> tuple | None:
         if choice == "n":
             name = input("Enter name for new spreadsheet: ").strip()
             if name:
-                try:
-                    sheets_service = build("sheets", "v4", credentials=credentials)
-                    spreadsheet = {"properties": {"title": name}}
-                    result = (
-                        sheets_service.spreadsheets().create(body=spreadsheet).execute()
-                    )
-                    spreadsheet_id = result["spreadsheetId"]
-                    print(f"✅ Created new spreadsheet: {name}")
+                created = _create_spreadsheet(credentials, name)
+                if created:
+                    spreadsheet_id, created_name = created
+                    print(f"✅ Created new spreadsheet: {created_name}")
                     print(f"   ID: {spreadsheet_id}")
-                    return (spreadsheet_id, name)
-                except Exception as e:
-                    print(f"❌ Failed to create spreadsheet: {e}")
+                    return (spreadsheet_id, created_name)
             continue
 
         if choice == "i":
             spreadsheet_id = input("Enter spreadsheet ID: ").strip()
             if spreadsheet_id:
-                try:
-                    sheets_service = build("sheets", "v4", credentials=credentials)
-                    result = (
-                        sheets_service.spreadsheets()
-                        .get(spreadsheetId=spreadsheet_id)
-                        .execute()
-                    )
-                    name = result.get("properties", {}).get("title", "Unknown")
+                name = _get_spreadsheet_name(credentials, spreadsheet_id)
+                if name:
                     return (spreadsheet_id, name)
-                except Exception as e:
-                    print(f"❌ Could not access spreadsheet: {e}")
             continue
 
         if choice.isdigit():

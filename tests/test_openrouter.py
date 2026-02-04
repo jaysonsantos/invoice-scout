@@ -160,9 +160,11 @@ class TestOpenRouterService:
     @patch("invoice_scanner.openrouter.OpenRouterService._send_request")
     def test_extract_invoice_data_api_error(self, mock_send):
         """Test handling of API error."""
+        import requests
+
         from invoice_scanner import OpenRouterService
 
-        mock_send.side_effect = Exception("API Error")
+        mock_send.side_effect = requests.RequestException("API Error")
 
         service = OpenRouterService("test-key")
         with pytest.raises(ValueError, match="ERROR: API Error"):

@@ -1,6 +1,7 @@
 """Configuration and state management."""
 
 import json
+import logging
 import os
 import re
 from pathlib import Path
@@ -17,6 +18,8 @@ STATE_FILE = Path.home() / ".invoice_scanner_state.json"
 
 DATE_DD_MM_YYYY_RE = re.compile(r"(\d{2})\.(\d{2})\.(\d{4})")
 DATE_YYYY_MM_DD_RE = re.compile(r"(\d{4})-(\d{2})-(\d{2})")
+
+logger = logging.getLogger(__name__)
 
 
 class InvoiceExtract(BaseModel):
@@ -100,13 +103,20 @@ class State(BaseModel):
     def load(cls) -> "State":
         """Load state from file or return empty state."""
         if STATE_FILE.exists():
-            try:
-                with open(STATE_FILE) as f:
-                    data = json.load(f)
+            data = cls._load_state_file()
+            if data is not None:
                 return cls.from_dict(data)
-            except Exception:
-                pass
         return cls()
+
+    @staticmethod
+    def _load_state_file() -> dict[str, Any] | None:
+        """Read the state file and return its JSON content."""
+        try:
+            with open(STATE_FILE) as f:
+                return json.load(f)
+        except (OSError, json.JSONDecodeError) as e:
+            logger.error(f"Failed to load state file: {e}")
+            return None
 
 
 class AppSettings(BaseSettings):
@@ -150,16 +160,23 @@ class Config:
         if not Path(self.google_credentials_path).exists():
             return None
 
+        creds_data = self._read_credentials_file()
+        if creds_data is None:
+            return None
+
+        if "installed" in creds_data:
+            return creds_data["installed"]
+        if "web" in creds_data:
+            return creds_data["web"]
+        return None
+
+    def _read_credentials_file(self) -> dict[str, Any] | None:
+        """Read OAuth2 credentials from disk."""
         try:
             with open(self.google_credentials_path) as f:
-                creds_data = json.load(f)
-
-            if "installed" in creds_data:
-                return creds_data["installed"]
-            if "web" in creds_data:
-                return creds_data["web"]
-            return None
-        except Exception:
+                return json.load(f)
+        except (OSError, json.JSONDecodeError, TypeError) as e:
+            logger.error(f"Failed to load OAuth2 credentials: {e}")
             return None
 
     def has_oauth2_config(self) -> bool:

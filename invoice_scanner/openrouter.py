@@ -7,8 +7,10 @@ from datetime import datetime
 from pathlib import Path
 
 import requests
+from pydantic import ValidationError
 
 from .config import DATE_DD_MM_YYYY_RE, InvoiceExtract
+from .utils import strip_code_fences
 
 logger = logging.getLogger(__name__)
 
@@ -82,6 +84,71 @@ Important:
         }
 
         prompt_log_file = Path("/tmp/last_invoice_prompt.json")
+        self._log_prompt(prompt_log_file, file_name, prompt, schema, payload)
+
+        result = self._send_or_raise(payload)
+        actual_model = result.get("model", "unknown")
+        logger.info(f"OpenRouter used model: {actual_model} for {file_name}")
+        self._update_prompt_log(prompt_log_file, actual_model)
+
+        content = self._extract_content(result)
+
+        extracted_data = self._parse_response_json(content)
+        normalized_data = self._normalize_extracted_data(extracted_data)
+        return self._validate_invoice(normalized_data)
+
+    def _send_request(self, payload: dict) -> dict:
+        """Send request to OpenRouter API and return response dict."""
+        response = requests.post(
+            self.API_URL, headers=self.headers, json=payload, timeout=120
+        )
+        response.raise_for_status()
+        return response.json()
+
+    def _send_or_raise(self, payload: dict) -> dict:
+        """Send request and wrap transport errors."""
+        try:
+            return self._send_request(payload)
+        except requests.RequestException as e:
+            logger.exception(f"OpenRouter API error: {e}")
+            raise ValueError(f"ERROR: {e}") from e
+
+    def _extract_content(self, result: dict) -> str:
+        """Extract content from OpenRouter response."""
+        choices = result.get("choices", [])
+        if not choices:
+            raise ValueError("NO_CHOICES")
+        return choices[0]["message"]["content"]
+
+    def _parse_response_json(self, content: str) -> dict:
+        """Parse JSON content from the model response."""
+        try:
+            return json.loads(strip_code_fences(content))
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to parse JSON response: {e}")
+            logger.error(f"Raw content that failed parsing:\n{content}")
+            raise ValueError("PARSE_ERROR") from e
+
+    def _validate_invoice(self, extracted_data: dict) -> InvoiceExtract:
+        """Validate parsed invoice data."""
+        try:
+            return InvoiceExtract.model_validate(extracted_data)
+        except ValidationError as e:
+            logger.exception(f"Validation error: {e}")
+            logger.error(
+                f"Raw response that failed validation:\n{json.dumps(extracted_data, indent=2)}"
+            )
+            raise
+
+    def _log_prompt(
+        self,
+        prompt_log_file: Path,
+        file_name: str,
+        prompt: str,
+        schema: dict,
+        payload: dict,
+    ) -> None:
+        """Write prompt payload to a temp file for debugging."""
         try:
             with open(prompt_log_file, "w") as f:
                 json.dump(
@@ -97,58 +164,20 @@ Important:
                     indent=2,
                     default=str,
                 )
-        except Exception as e:
+        except (OSError, TypeError) as e:
             logger.debug(f"Could not log prompt to file: {e}")
 
-        content = None
+    def _update_prompt_log(self, prompt_log_file: Path, actual_model: str) -> None:
+        """Update prompt log with the model selected by OpenRouter."""
         try:
-            result = self._send_request(payload)
-            actual_model = result.get("model", "unknown")
-            logger.info(f"OpenRouter used model: {actual_model} for {file_name}")
-            try:
-                with open(prompt_log_file, "r+") as f:
-                    log_data = json.load(f)
-                    log_data["actual_model_used"] = actual_model
-                    f.seek(0)
-                    json.dump(log_data, f, indent=2, default=str)
-                    f.truncate()
-            except Exception as e:
-                logger.debug(f"Could not update prompt log with model: {e}")
-
-            if "choices" not in result or not result["choices"]:
-                raise ValueError("NO_CHOICES")
-
-            content = result["choices"][0]["message"]["content"]
-
-        except Exception as e:
-            logger.exception(f"OpenRouter API error: {e}")
-            raise ValueError(f"ERROR: {e}") from e
-
-        try:
-            extracted_data = json.loads(self._strip_code_fences(content))
-        except json.JSONDecodeError as e:
-            logger.error(f"Failed to parse JSON response: {e}")
-            logger.error(f"Raw content that failed parsing:\n{content}")
-            raise ValueError("PARSE_ERROR") from e
-
-        extracted_data = self._normalize_extracted_data(extracted_data)
-
-        try:
-            return InvoiceExtract.model_validate(extracted_data)
-        except Exception as e:
-            logger.exception(f"Validation error: {e}")
-            logger.error(
-                f"Raw response that failed validation:\n{json.dumps(extracted_data, indent=2)}"
-            )
-            raise
-
-    def _send_request(self, payload: dict) -> dict:
-        """Send request to OpenRouter API and return response dict."""
-        response = requests.post(
-            self.API_URL, headers=self.headers, json=payload, timeout=120
-        )
-        response.raise_for_status()
-        return response.json()
+            with open(prompt_log_file, "r+") as f:
+                log_data = json.load(f)
+                log_data["actual_model_used"] = actual_model
+                f.seek(0)
+                json.dump(log_data, f, indent=2, default=str)
+                f.truncate()
+        except (OSError, json.JSONDecodeError, TypeError) as e:
+            logger.debug(f"Could not update prompt log with model: {e}")
 
     def _normalize_extracted_data(self, extracted_data: dict) -> dict:
         """Normalize extracted data without introducing ambiguous fields."""
@@ -196,17 +225,3 @@ Important:
         }
 
         return normalized
-
-    def _strip_code_fences(self, content: str) -> str:
-        """Remove optional markdown code fences around JSON."""
-        if not content:
-            return content
-
-        stripped = content.strip()
-        if stripped.startswith("```"):
-            stripped = stripped[3:]
-            if stripped.startswith("json"):
-                stripped = stripped[4:]
-            if stripped.endswith("```"):
-                stripped = stripped[:-3]
-        return stripped.strip()

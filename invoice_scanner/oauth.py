@@ -1,6 +1,7 @@
 """OAuth2 authentication flow."""
 
 import json
+import logging
 import sys
 import threading
 import urllib.parse
@@ -8,8 +9,10 @@ import urllib.request
 import webbrowser
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Any
+from urllib.error import URLError
 from urllib.parse import parse_qs, urlparse
 
+from google.auth.exceptions import RefreshError
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 
@@ -17,6 +20,8 @@ from .config import Config, State
 
 OAUTH2_CALLBACK_PORT = 8080
 OAUTH2_CALLBACK_PATH = "/oauth2callback"
+
+logger = logging.getLogger(__name__)
 
 
 class OAuth2CallbackHandler(BaseHTTPRequestHandler):
@@ -27,8 +32,7 @@ class OAuth2CallbackHandler(BaseHTTPRequestHandler):
 
     def log_message(self, format: str, *args: Any) -> None:
         """Suppress default logging."""
-        if "favicon" not in str(args):
-            return
+        return
 
     def do_GET(self) -> None:
         """Handle GET request with authorization code."""
@@ -108,13 +112,9 @@ class OAuth2Manager:
                 scopes=self.config.get_oauth2_scopes(),
             )
 
-            try:
-                if creds.expired or not self.state.access_token:
-                    creds.refresh(Request())
-                    self._save_credentials(creds)
-                return creds
-            except Exception:
+            if not self._refresh_credentials(creds):
                 return None
+            return creds
 
         return None
 
@@ -187,8 +187,9 @@ class OAuth2Manager:
             method="POST",
         )
 
-        with urllib.request.urlopen(req, timeout=30) as response:
-            token_response = json.loads(response.read().decode())
+        token_response = self._exchange_token(req)
+        if token_response is None:
+            raise ValueError("Token exchange failed")
 
         if "error" in token_response:
             raise ValueError(f"Token exchange failed: {token_response['error']}")
@@ -211,6 +212,26 @@ class OAuth2Manager:
         self.state.refresh_token = creds.refresh_token
         self.state.token_expiry = creds.expiry.isoformat() if creds.expiry else None
         self.state.save()
+
+    def _refresh_credentials(self, creds: Credentials) -> bool:
+        """Refresh credentials if needed."""
+        try:
+            if creds.expired or not self.state.access_token:
+                creds.refresh(Request())
+                self._save_credentials(creds)
+            return True
+        except RefreshError as e:
+            logger.error(f"Failed to refresh credentials: {e}")
+            return False
+
+    def _exchange_token(self, req: urllib.request.Request) -> dict[str, Any] | None:
+        """Exchange auth code for tokens."""
+        try:
+            with urllib.request.urlopen(req, timeout=30) as response:
+                return json.loads(response.read().decode())
+        except (URLError, TimeoutError, json.JSONDecodeError) as e:
+            logger.error(f"Token exchange failed: {e}")
+            return None
 
     def get_credentials(self) -> Credentials:
         """Get valid credentials, running auth flow if needed."""

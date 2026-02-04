@@ -6,6 +6,8 @@ class TestYearExtraction:
 
     def test_extract_year_from_date(self):
         """Test extracting year from various date formats."""
+        from invoice_scanner.utils import extract_year
+
         test_cases = [
             ("2024-03-15", "2024"),
             ("2024-12-31", "2024"),
@@ -14,12 +16,13 @@ class TestYearExtraction:
         ]
 
         for date_str, expected_year in test_cases:
-            if date_str and len(date_str) >= 4:
-                year = date_str[:4]
-                assert year == expected_year, f"Failed for date: {date_str}"
+            year = extract_year(date_str)
+            assert year == expected_year, f"Failed for date: {date_str}"
 
     def test_extract_year_invalid_dates(self):
         """Test handling of invalid dates."""
+        from invoice_scanner.utils import extract_year
+
         invalid_dates = [
             "",
             "N/A",
@@ -29,9 +32,7 @@ class TestYearExtraction:
         ]
 
         for date_str in invalid_dates:
-            if not date_str or len(date_str) < 4 or not date_str[:4].isdigit():
-                # Should default to "Unknown"
-                pass  # Invalid dates handled gracefully
+            assert extract_year(date_str) == "Unknown"
 
 
 class TestSheetNameGeneration:
@@ -39,6 +40,8 @@ class TestSheetNameGeneration:
 
     def test_sheet_name_with_valid_year(self):
         """Test generating sheet name from valid invoice dates."""
+        from invoice_scanner.utils import sheet_name_for_date
+
         test_cases = [
             ("2024-03-15", "Invoices 2024"),
             ("2025-01-01", "Invoices 2025"),
@@ -46,20 +49,17 @@ class TestSheetNameGeneration:
         ]
 
         for date_str, expected_sheet in test_cases:
-            if date_str and len(date_str) >= 4:
-                year = date_str[:4]
-                if year.isdigit():
-                    sheet_name = f"Invoices {year}"
-                    assert sheet_name == expected_sheet
+            sheet_name = sheet_name_for_date(date_str)
+            assert sheet_name == expected_sheet
 
     def test_sheet_name_with_invalid_date(self):
         """Test generating sheet name from invalid dates."""
+        from invoice_scanner.utils import sheet_name_for_date
+
         invalid_dates = ["", "N/A", None, "invalid"]
 
         for date_str in invalid_dates:
-            if not date_str or len(date_str) < 4:
-                sheet_name = "Invoices Unknown"
-                assert sheet_name == "Invoices Unknown"
+            assert sheet_name_for_date(date_str) == "Invoices Unknown"
 
 
 class TestJSONParsing:
@@ -69,6 +69,8 @@ class TestJSONParsing:
         """Test extracting JSON from markdown code blocks."""
         import json
 
+        from invoice_scanner.utils import strip_code_fences
+
         content = """```json
         {
             "invoice_number": "INV-001",
@@ -76,19 +78,15 @@ class TestJSONParsing:
         }
         ```"""
 
-        json_str = content.strip()
-        if "```json" in content:
-            json_str = content.split("```json")[1].split("```")[0].strip()
-        elif "```" in content:
-            json_str = content.split("```")[1].split("```")[0].strip()
-
-        data = json.loads(json_str)
+        data = json.loads(strip_code_fences(content))
         assert data["invoice_number"] == "INV-001"
         assert data["company"] == "Test Corp"
 
     def test_extract_json_from_generic_code_blocks(self):
         """Test extracting JSON from generic markdown code blocks."""
         import json
+
+        from invoice_scanner.utils import strip_code_fences
 
         content = """```
         {
@@ -97,35 +95,21 @@ class TestJSONParsing:
         }
         ```"""
 
-        json_str = content.strip()
-        if "```json" in content:
-            json_str = content.split("```json")[1].split("```")[0].strip()
-        elif "```" in content:
-            json_str = content.split("```")[1].split("```")[0].strip()
-
-        data = json.loads(json_str)
+        data = json.loads(strip_code_fences(content))
         assert data["invoice_number"] == "INV-002"
 
     def test_extract_json_plain_text(self):
         """Test extracting JSON from plain text."""
         import json
 
+        from invoice_scanner.utils import strip_code_fences
+
         content = """{
             "invoice_number": "INV-003",
             "company": "Plain Corp"
         }"""
 
-        json_str = content.strip()
-        if "```json" in content:
-            json_str = content.split("```json")[1].split("```")[0].strip()
-        elif "```" in content:
-            json_str = content.split("```")[1].split("```")[0].strip()
-
-        # Remove any non-JSON prefix/suffix
-        if json_str.startswith("{"):
-            json_str = json_str[json_str.find("{") : json_str.rfind("}") + 1]
-
-        data = json.loads(json_str)
+        data = json.loads(strip_code_fences(content))
         assert data["invoice_number"] == "INV-003"
 
 
