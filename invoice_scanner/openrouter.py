@@ -7,10 +7,7 @@ import re
 from datetime import datetime
 from pathlib import Path
 
-from openrouter import OpenRouter, components
-from openrouter._hooks.types import HookContext
-from openrouter.utils.requestbodies import serialize_request_body
-from openrouter.utils.security import get_security_from_env
+import requests
 from pydantic import BaseModel, Field, field_validator
 
 logger = logging.getLogger(__name__)
@@ -85,7 +82,10 @@ class OpenRouterService:
 
     def __init__(self, api_key: str):
         self.api_key = api_key
-        self.client = OpenRouter(api_key=api_key)
+        self.headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        }
 
     def extract_invoice_data(self, pdf_content: bytes, file_name: str) -> dict:
         """Extract invoice data from PDF using OpenRouter."""
@@ -101,46 +101,7 @@ Important:
 - Tax amount is the VAT/sales tax paid
 """
 
-        schema = {
-            "type": "object",
-            "properties": {
-                "invoice_number": {
-                    "type": "string",
-                    "description": "The invoice number/ID",
-                },
-                "invoice_date": {
-                    "type": "string",
-                    "description": "Invoice date in YYYY-MM-DD format",
-                },
-                "company": {"type": "string", "description": "The company/vendor name"},
-                "product": {
-                    "type": "string",
-                    "description": "The main product or service description",
-                },
-                "total_value": {
-                    "type": "string",
-                    "description": "Total amount as a number string",
-                },
-                "currency": {
-                    "type": "string",
-                    "description": "Currency code (e.g., EUR, USD)",
-                },
-                "taxes_paid": {"type": "string", "description": "Tax amount"},
-                "language": {
-                    "type": "string",
-                    "description": "Language: 'en' or 'de'. If unknown, infer from invoice language or locale.",
-                },
-            },
-            "required": [
-                "invoice_number",
-                "invoice_date",
-                "company",
-                "product",
-                "language",
-                "total_value",
-                "currency",
-            ],
-        }
+        schema = InvoiceExtract.model_json_schema()
 
         payload = {
             "model": self.MODEL,
@@ -231,48 +192,11 @@ Important:
             return self._error_response(f"ERROR: {e}")
 
     def _send_request(self, payload: dict) -> dict:
-        """Send request using OpenRouter SDK and return response dict."""
-        req = self.client._build_request(
-            method="POST",
-            path="/chat/completions",
-            base_url=self.client.sdk_configuration.server_url
-            or "https://openrouter.ai/api/v1",
-            url_variables=None,
-            request=payload,
-            request_body_required=True,
-            request_has_path_params=False,
-            request_has_query_params=True,
-            user_agent_header="user-agent",
-            accept_header_value="application/json",
-            http_headers=None,
-            security=self.client.sdk_configuration.security,
-            get_serialized_body=lambda: serialize_request_body(
-                payload,
-                nullable=False,
-                optional=False,
-                serialization_method="json",
-                request_body_type=dict,
-            ),
-            allow_empty_value=None,
-            timeout_ms=self.client.sdk_configuration.timeout_ms,
-            url_override=None,
+        """Send request to OpenRouter API and return response dict."""
+        response = requests.post(
+            self.API_URL, headers=self.headers, json=payload, timeout=120
         )
-
-        hook_ctx = HookContext(
-            config=self.client.sdk_configuration,
-            base_url=self.client.sdk_configuration.server_url
-            or "https://openrouter.ai/api/v1",
-            operation_id="sendChatCompletionRequest",
-            oauth2_scopes=None,
-            security_source=get_security_from_env(
-                self.client.sdk_configuration.security, components.Security
-            ),
-        )
-        response = self.client.do_request(
-            hook_ctx=hook_ctx,
-            request=req,
-            error_status_codes=["400", "401", "403", "404", "429", "500", "502", "503"],
-        )
+        response.raise_for_status()
         return response.json()
 
     def _normalize_extracted_data(self, extracted_data: dict) -> dict:
