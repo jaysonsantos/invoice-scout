@@ -2,10 +2,11 @@
 
 import json
 import os
+import re
 from pathlib import Path
 from typing import Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 load_dotenv = __import__("dotenv").load_dotenv
@@ -14,22 +15,59 @@ load_dotenv()
 
 STATE_FILE = Path.home() / ".invoice_scanner_state.json"
 
+DATE_DD_MM_YYYY_RE = re.compile(r"(\d{2})\.(\d{2})\.(\d{4})")
+DATE_YYYY_MM_DD_RE = re.compile(r"(\d{4})-(\d{2})-(\d{2})")
 
-class InvoiceData(BaseModel):
+
+class InvoiceExtract(BaseModel):
     """Data structure for extracted invoice information."""
 
-    file_id: str
-    file_name: str
-    file_url: str
+    model_config = {
+        "extra": "ignore",
+    }
+
+    file_id: str | None = None
+    file_name: str | None = None
+    file_url: str | None = None
+    extraction_date: str | None = None
+
     invoice_number: str
     invoice_date: str
+    language: str = "unknown"
     company: str
     product: str
     total_value: str
-    taxes_paid: str
     currency: str
-    extraction_date: str
-    language: str = "unknown"
+    taxes_paid: str = "N/A"
+    extra_fields: dict[str, object] = Field(default_factory=dict)
+
+    @field_validator("invoice_date", mode="before")
+    @classmethod
+    def _normalize_invoice_date(cls, value: str) -> str:
+        if not value:
+            return value
+
+        dd_mm_yyyy = DATE_DD_MM_YYYY_RE.match(value)
+        if dd_mm_yyyy:
+            day, month, year = dd_mm_yyyy.groups()
+            return f"{year}-{month}-{day}"
+
+        yyyy_mm_dd = DATE_YYYY_MM_DD_RE.match(value)
+        if yyyy_mm_dd:
+            return value
+
+        return value
+
+    @field_validator(
+        "company", "product", "language", "total_value", "currency", mode="before"
+    )
+    @classmethod
+    def _require_non_unknown(cls, value: str) -> str:
+        if value is None:
+            raise ValueError("Required field is missing")
+        if isinstance(value, str) and value.strip().lower() in {"n/a", "unknown", ""}:
+            raise ValueError("Required field is missing")
+        return value
 
 
 class State(BaseModel):

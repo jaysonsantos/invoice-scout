@@ -5,7 +5,7 @@ import re
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 
-from .config import InvoiceData
+from .config import InvoiceExtract
 
 
 class GoogleSheetsService:
@@ -93,7 +93,7 @@ class GoogleSheetsService:
 
         return all_file_ids
 
-    def append_invoice(self, invoice: InvoiceData, invoice_date: str) -> None:
+    def append_invoice(self, invoice: InvoiceExtract, invoice_date: str) -> None:
         """Append invoice data to the appropriate year-specific sheet."""
         year = "Unknown"
         if invoice_date and len(invoice_date) >= 4 and invoice_date[:4].isdigit():

@@ -3,24 +3,11 @@
 import json
 from unittest.mock import patch
 
+import pytest
+
 
 class TestOpenRouterService:
     """Test cases for the OpenRouterService class."""
-
-    def test_error_response_format(self):
-        """Test that _error_response returns correct format."""
-        from invoice_scanner import OpenRouterService
-
-        service = OpenRouterService("test-key")
-        error = service._error_response("TEST_ERROR")
-
-        assert error["invoice_number"] == "TEST_ERROR"
-        assert error["company"] == "TEST_ERROR"
-        assert error["product"] == "TEST_ERROR"
-        assert error["total_value"] == "TEST_ERROR"
-        assert error["currency"] == "TEST_ERROR"
-        assert error["taxes_paid"] == "TEST_ERROR"
-        assert error["language"] == "unknown"
 
     @patch("invoice_scanner.openrouter.OpenRouterService._send_request")
     def test_extract_invoice_data_success(self, mock_send):
@@ -53,10 +40,10 @@ class TestOpenRouterService:
         service = OpenRouterService("test-key")
         result = service.extract_invoice_data(b"fake-pdf-content", "invoice.pdf")
 
-        assert result["invoice_number"] == "INV-001"
-        assert result["invoice_date"] == "2024-03-15"
-        assert result["company"] == "Test Corp"
-        assert result["language"] == "en"
+        assert result.invoice_number == "INV-001"
+        assert result.invoice_date == "2024-03-15"
+        assert result.company == "Test Corp"
+        assert result.language == "en"
         mock_send.assert_called_once()
 
     @patch("invoice_scanner.openrouter.OpenRouterService._send_request")
@@ -89,8 +76,8 @@ class TestOpenRouterService:
         service = OpenRouterService("test-key")
         result = service.extract_invoice_data(b"fake-pdf-content", "invoice.pdf")
 
-        assert result["invoice_number"] == "INV-002"
-        assert result["language"] == "de"
+        assert result.invoice_number == "INV-002"
+        assert result.language == "de"
 
         call_args, call_kwargs = mock_send.call_args
         payload = call_args[0] if call_args else call_kwargs.get("payload", {})
@@ -131,10 +118,10 @@ class TestOpenRouterService:
         service = OpenRouterService("test-key")
         result = service.extract_invoice_data(b"fake-pdf-content", "invoice.pdf")
 
-        assert result["invoice_number"] == "INV-003"
-        assert result["invoice_date"] == "2026-01-06"
-        assert result["company"] == "German Corp"
-        assert result["language"] == "de"
+        assert result.invoice_number == "INV-003"
+        assert result.invoice_date == "2026-01-06"
+        assert result.company == "German Corp"
+        assert result.language == "de"
 
         call_args, call_kwargs = mock_send.call_args
         payload = call_args[0] if call_args else call_kwargs.get("payload", {})
@@ -153,9 +140,8 @@ class TestOpenRouterService:
         mock_send.return_value = {"model": "test-model", "choices": []}
 
         service = OpenRouterService("test-key")
-        result = service.extract_invoice_data(b"fake-pdf-content", "invoice.pdf")
-
-        assert result["invoice_number"] == "NO_CHOICES"
+        with pytest.raises(ValueError, match="NO_CHOICES"):
+            service.extract_invoice_data(b"fake-pdf-content", "invoice.pdf")
 
     @patch("invoice_scanner.openrouter.OpenRouterService._send_request")
     def test_extract_invoice_data_invalid_json(self, mock_send):
@@ -168,9 +154,8 @@ class TestOpenRouterService:
         }
 
         service = OpenRouterService("test-key")
-        result = service.extract_invoice_data(b"fake-pdf-content", "invoice.pdf")
-
-        assert result["invoice_number"] == "PARSE_ERROR"
+        with pytest.raises(ValueError, match="PARSE_ERROR"):
+            service.extract_invoice_data(b"fake-pdf-content", "invoice.pdf")
 
     @patch("invoice_scanner.openrouter.OpenRouterService._send_request")
     def test_extract_invoice_data_api_error(self, mock_send):
@@ -180,9 +165,8 @@ class TestOpenRouterService:
         mock_send.side_effect = Exception("API Error")
 
         service = OpenRouterService("test-key")
-        result = service.extract_invoice_data(b"fake-pdf-content", "invoice.pdf")
-
-        assert result["invoice_number"] == "ERROR: API Error"
+        with pytest.raises(ValueError, match="ERROR: API Error"):
+            service.extract_invoice_data(b"fake-pdf-content", "invoice.pdf")
 
     def test_model_constant(self):
         """Test that MODEL constant is set correctly."""

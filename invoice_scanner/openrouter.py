@@ -3,17 +3,15 @@
 import base64
 import json
 import logging
-import re
 from datetime import datetime
 from pathlib import Path
 
 import requests
-from pydantic import BaseModel, Field, field_validator
+
+from .config import DATE_DD_MM_YYYY_RE, InvoiceExtract
 
 logger = logging.getLogger(__name__)
 
-DATE_DD_MM_YYYY_RE = re.compile(r"(\d{2})\.(\d{2})\.(\d{4})")
-DATE_YYYY_MM_DD_RE = re.compile(r"(\d{4})-(\d{2})-(\d{2})")
 ALLOWED_SCHEMA_KEYS = {
     "invoice_number",
     "invoice_date",
@@ -25,53 +23,6 @@ ALLOWED_SCHEMA_KEYS = {
     "language",
 }
 EXTRA_FIELDS_KEY = "extra_fields"
-
-
-class InvoiceExtract(BaseModel):
-    """Pydantic model for invoice extraction response."""
-
-    model_config = {
-        "extra": "ignore",
-    }
-
-    invoice_number: str
-    invoice_date: str
-    language: str
-    company: str
-    product: str
-
-    total_value: str
-    currency: str
-    taxes_paid: str = "N/A"
-    extra_fields: dict[str, object] = Field(default_factory=dict)
-
-    @field_validator("invoice_date", mode="before")
-    @classmethod
-    def _normalize_invoice_date(cls, value: str) -> str:
-        if not value:
-            return value
-
-        dd_mm_yyyy = DATE_DD_MM_YYYY_RE.match(value)
-        if dd_mm_yyyy:
-            day, month, year = dd_mm_yyyy.groups()
-            return f"{year}-{month}-{day}"
-
-        yyyy_mm_dd = DATE_YYYY_MM_DD_RE.match(value)
-        if yyyy_mm_dd:
-            return value
-
-        return value
-
-    @field_validator(
-        "company", "product", "language", "total_value", "currency", mode="before"
-    )
-    @classmethod
-    def _require_non_unknown(cls, value: str) -> str:
-        if value is None:
-            raise ValueError("Required field is missing")
-        if isinstance(value, str) and value.strip().lower() in {"n/a", "unknown", ""}:
-            raise ValueError("Required field is missing")
-        return value
 
 
 class OpenRouterService:
@@ -87,7 +38,9 @@ class OpenRouterService:
             "Content-Type": "application/json",
         }
 
-    def extract_invoice_data(self, pdf_content: bytes, file_name: str) -> dict:
+    def extract_invoice_data(
+        self, pdf_content: bytes, file_name: str
+    ) -> InvoiceExtract:
         """Extract invoice data from PDF using OpenRouter."""
         pdf_base64 = base64.b64encode(pdf_content).decode("utf-8")
 
@@ -163,33 +116,31 @@ Important:
                 logger.debug(f"Could not update prompt log with model: {e}")
 
             if "choices" not in result or not result["choices"]:
-                return self._error_response("NO_CHOICES")
+                raise ValueError("NO_CHOICES")
 
             content = result["choices"][0]["message"]["content"]
 
         except Exception as e:
             logger.exception(f"OpenRouter API error: {e}")
-            return self._error_response(f"ERROR: {e}")
+            raise ValueError(f"ERROR: {e}") from e
 
         try:
             extracted_data = json.loads(self._strip_code_fences(content))
         except json.JSONDecodeError as e:
             logger.error(f"Failed to parse JSON response: {e}")
             logger.error(f"Raw content that failed parsing:\n{content}")
-            return self._error_response("PARSE_ERROR")
+            raise ValueError("PARSE_ERROR") from e
 
         extracted_data = self._normalize_extracted_data(extracted_data)
 
         try:
-            invoice = InvoiceExtract.model_validate(extracted_data)
-            data = invoice.model_dump()
-            return data
+            return InvoiceExtract.model_validate(extracted_data)
         except Exception as e:
             logger.exception(f"Validation error: {e}")
             logger.error(
                 f"Raw response that failed validation:\n{json.dumps(extracted_data, indent=2)}"
             )
-            return self._error_response(f"ERROR: {e}")
+            raise
 
     def _send_request(self, payload: dict) -> dict:
         """Send request to OpenRouter API and return response dict."""
@@ -259,16 +210,3 @@ Important:
             if stripped.endswith("```"):
                 stripped = stripped[:-3]
         return stripped.strip()
-
-    def _error_response(self, error_type: str) -> dict:
-        """Return a standardized error response."""
-        return {
-            "invoice_number": error_type,
-            "invoice_date": error_type,
-            "company": error_type,
-            "product": error_type,
-            "total_value": error_type,
-            "currency": error_type,
-            "taxes_paid": error_type,
-            "language": "unknown",
-        }

@@ -152,9 +152,9 @@ class TestGermanTaxFields:
 
     def test_required_fields_for_german_tax(self):
         """Test that all required fields for German tax filing are present."""
-        from invoice_scanner import InvoiceData
+        from invoice_scanner import InvoiceExtract
 
-        invoice = InvoiceData(
+        invoice = InvoiceExtract(
             file_id="file-123",
             file_name="invoice.pdf",
             file_url="https://example.com",

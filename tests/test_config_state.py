@@ -159,9 +159,9 @@ class TestInvoiceData:
 
     def test_invoice_data_creation(self):
         """Test that InvoiceData can be created with all fields."""
-        from invoice_scanner import InvoiceData
+        from invoice_scanner import InvoiceExtract
 
-        invoice = InvoiceData(
+        invoice = InvoiceExtract(
             file_id="file-123",
             file_name="invoice.pdf",
             file_url="https://drive.google.com/file/d/123",
@@ -182,9 +182,9 @@ class TestInvoiceData:
 
     def test_invoice_data_default_language(self):
         """Test that language defaults to 'unknown'."""
-        from invoice_scanner import InvoiceData
+        from invoice_scanner import InvoiceExtract
 
-        invoice = InvoiceData(
+        invoice = InvoiceExtract(
             file_id="file-123",
             file_name="invoice.pdf",
             file_url="https://example.com",

@@ -9,7 +9,7 @@ from datetime import datetime
 from google.oauth2.credentials import Credentials
 
 from .cli import setup_wizard
-from .config import Config, InvoiceData, State
+from .config import Config, InvoiceExtract, State
 from .drive import GoogleDriveService
 from .oauth import OAuth2Manager
 from .openrouter import OpenRouterService
@@ -28,27 +28,21 @@ class InvoiceProcessor:
         self.sheets_service = GoogleSheetsService(credentials, config.spreadsheet_id)
         self.openrouter_service = OpenRouterService(config.openrouter_api_key)
 
-    def _process_file(self, file_info: dict) -> InvoiceData | None:
-        """Process a single file and return InvoiceData."""
+    def _process_file(self, file_info: dict) -> InvoiceExtract | None:
+        """Process a single file and return InvoiceExtract."""
         try:
             pdf_content = self.drive_service.download_pdf(file_info["id"])
             extracted = self.openrouter_service.extract_invoice_data(
                 pdf_content, file_info["name"]
             )
 
-            invoice = InvoiceData(
-                file_id=file_info["id"],
-                file_name=file_info["name"],
-                file_url=file_info.get("webViewLink", ""),
-                invoice_number=extracted.get("invoice_number", "N/A"),
-                invoice_date=extracted.get("invoice_date", "N/A"),
-                company=extracted.get("company", "N/A"),
-                product=extracted.get("product", "N/A"),
-                total_value=extracted.get("total_value", "N/A"),
-                taxes_paid=extracted.get("taxes_paid", "N/A"),
-                currency=extracted.get("currency", "N/A"),
-                extraction_date=datetime.now().isoformat(),
-                language=extracted.get("language", "unknown"),
+            invoice = extracted.model_copy(
+                update={
+                    "file_id": file_info["id"],
+                    "file_name": file_info["name"],
+                    "file_url": file_info.get("webViewLink", ""),
+                    "extraction_date": datetime.now().isoformat(),
+                }
             )
             return invoice
         except Exception:

@@ -148,6 +148,7 @@ except Exception as e:
 - **Authentication**: OAuth2 flow with local HTTP server callback
 - **External APIs**: OpenRouter (LLM), Google Drive/Sheets API
 - **Parallelism**: File processing runs via ThreadPoolExecutor (default 5 workers)
+- **OpenRouter PDF inputs**: The Python SDK `chat.send()` currently does not accept `type: "file"` content; use the HTTP API for PDF uploads when needed.
 
 ## Ruff Rules Applied
 
