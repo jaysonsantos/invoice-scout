@@ -16,6 +16,7 @@
   packages = [
     pkgs.git
     pkgs.uv
+    pkgs.poppler-utils
   ];
 
   git-hooks.hooks = {
