@@ -2,6 +2,7 @@
 
 import json
 import logging
+import subprocess
 from concurrent.futures import ThreadPoolExecutor as PoolExecutor
 from concurrent.futures import as_completed
 from datetime import datetime
@@ -38,6 +39,23 @@ class InvoiceProcessor:
         if not pdf_content:
             return None
 
+        extracted = self._extract_invoice(pdf_content, file_info)
+        if not extracted:
+            return None
+
+        return extracted.model_copy(
+            update={
+                "file_id": file_info["id"],
+                "file_name": file_info["name"],
+                "file_url": file_info.get("webViewLink", ""),
+                "extraction_date": datetime.now().isoformat(),
+            }
+        )
+
+    def _process_content(
+        self, file_info: dict, pdf_content: bytes
+    ) -> InvoiceExtract | None:
+        """Process a pre-downloaded PDF and return InvoiceExtract."""
         extracted = self._extract_invoice(pdf_content, file_info)
         if not extracted:
             return None
@@ -106,10 +124,20 @@ class InvoiceProcessor:
         processed_count = 0
         total_value = 0.0
 
+        downloaded: list[tuple[dict, bytes]] = []
+        for file_info in new_files:
+            pdf_content = self._download_pdf(file_info)
+            if not pdf_content:
+                continue
+            downloaded.append((file_info, pdf_content))
+
+        extracted_invoices: list[InvoiceExtract] = []
         with PoolExecutor(max_workers=5) as executor:
             futures = {
-                executor.submit(self._process_file, file_info): file_info
-                for file_info in new_files
+                executor.submit(
+                    self._process_content, file_info, pdf_content
+                ): file_info
+                for file_info, pdf_content in downloaded
             }
 
             for future in as_completed(futures):
@@ -121,13 +149,23 @@ class InvoiceProcessor:
                     continue
                 if not invoice:
                     continue
+                extracted_invoices.append(invoice)
 
-                if self._append_invoice(invoice, file_info["name"]):
+        if extracted_invoices:
+            try:
+                appended_ids = self.sheets_service.append_invoices_batch(
+                    extracted_invoices
+                )
+            except HttpError as e:
+                logger.exception(f"Failed to append invoice batch: {e}")
+                appended_ids = set()
+            for invoice in extracted_invoices:
+                if invoice.file_id in appended_ids:
                     processed_count += 1
                     value = self._parse_total_value(invoice)
                     if value is not None:
                         total_value += value
-                    logger.info(f"Successfully processed: {file_info['name']}")
+                    logger.info(f"Successfully processed: {invoice.file_name}")
 
         state = self.config.state
         state.last_run = datetime.now().isoformat()
@@ -198,7 +236,7 @@ def _run_setup(config: Config) -> None:
         print(f"\n❌ Setup failed: {e}")
 
 
-def _run_scan(config: Config, state: State) -> None:
+def _run_scan(config: Config, state: State, model_name: str | None = None) -> None:
     """Run invoice scanning with validated config and credentials."""
     if not config.drive_folder_id or not config.spreadsheet_id:
         print("❌ Missing configuration. Run 'uv run main.py setup' first.")
@@ -209,6 +247,8 @@ def _run_scan(config: Config, state: State) -> None:
         return
 
     processor = InvoiceProcessor(config, credentials)
+    if model_name:
+        processor.openrouter_service.model = model_name
     processor.run()
 
 
@@ -229,8 +269,14 @@ def _load_state(ctx: click.Context) -> None:
     is_flag=True,
     help="Enable DEBUG level logging",
 )
+@click.option(
+    "--model",
+    "model_name",
+    default=None,
+    help="Override OpenRouter model ID for this run.",
+)
 @click.pass_context
-def main(ctx: click.Context, verbose: bool) -> None:
+def main(ctx: click.Context, verbose: bool, model_name: str | None) -> None:
     """Main entry point with CLI."""
     log_level = logging.DEBUG if verbose else logging.INFO
     logging.basicConfig(level=log_level)
@@ -241,7 +287,7 @@ def main(ctx: click.Context, verbose: bool) -> None:
         config = _load_config(state)
         if not config:
             return
-        _run_scan(config, state)
+        _run_scan(config, state, model_name)
 
 
 @main.command("reset")
@@ -286,7 +332,7 @@ def scan_command(ctx: click.Context) -> None:
     config = _load_config(state)
     if not config:
         return
-    _run_scan(config, state)
+    _run_scan(config, state, ctx.find_root().params.get("model_name"))
 
 
 @main.command("local")
@@ -295,11 +341,35 @@ def scan_command(ctx: click.Context) -> None:
 )
 @click.option(
     "--model",
-    "model_name",
-    default=None,
-    help="Override OpenRouter model ID for this run.",
+    "model_names",
+    multiple=True,
+    help="OpenRouter model ID (repeatable for A/B runs).",
 )
-def local_command(pdf_path: Path, model_name: str | None) -> None:
+@click.option(
+    "--dump",
+    is_flag=True,
+    help="Write input/output payloads to /tmp/invoice-scout for debugging.",
+)
+@click.option(
+    "--dump-dir",
+    type=click.Path(file_okay=False, path_type=Path),
+    default=Path("/tmp/invoice-scout"),
+    show_default=True,
+    help="Directory for dump output when --dump is enabled.",
+)
+@click.option(
+    "--pdftotext/--no-pdftotext",
+    default=True,
+    show_default=True,
+    help="Extract text with pdftotext and send text instead of PDF bytes.",
+)
+def local_command(
+    pdf_path: Path,
+    model_names: tuple[str, ...],
+    dump: bool,
+    dump_dir: Path,
+    pdftotext: bool,
+) -> None:
     """Extract invoice data from a local PDF without writing to Sheets."""
     state = State.load()
     config = _load_config(state)
@@ -312,11 +382,53 @@ def local_command(pdf_path: Path, model_name: str | None) -> None:
         print(f"❌ Failed to read {pdf_path}: {e}", flush=True)
         return
 
-    service = OpenRouterService(config.openrouter_api_key, model=model_name)
-    try:
-        extracted = service.extract_invoice_data(pdf_content, pdf_path.name)
-    except ValueError as e:
-        print(f"❌ Extraction failed: {e}", flush=True)
-        return
+    extracted_text: str | None = None
+    if pdftotext:
+        try:
+            result = subprocess.run(
+                ["pdftotext", str(pdf_path), "-"],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            extracted_text = result.stdout
+        except (OSError, subprocess.CalledProcessError) as e:
+            print(f"❌ Failed to run pdftotext: {e}", flush=True)
+            return
 
-    print(json.dumps(extracted.model_dump(), indent=2), flush=True)
+    models = list(model_names) or [None]
+
+    def _run_model(model_name: str | None) -> dict:
+        service = OpenRouterService(
+            config.openrouter_api_key,
+            model=model_name,
+            dump_enabled=dump,
+            dump_dir=dump_dir,
+        )
+        try:
+            extracted = service.extract_invoice_data(
+                pdf_content, pdf_path.name, extracted_text=extracted_text
+            )
+        except ValueError as e:
+            return {"model": model_name or service.model, "error": str(e)}
+        return {
+            "model": model_name or service.model,
+            "invoice": extracted.model_dump(),
+            "usage": service.last_usage,
+            "headers": service.last_headers,
+        }
+
+    results: list[dict] = []
+    max_workers = min(len(models), 4)
+    with PoolExecutor(max_workers=max_workers) as executor:
+        futures = {
+            executor.submit(_run_model, model_name): index
+            for index, model_name in enumerate(models)
+        }
+        ordered: list[dict | None] = [None] * len(models)
+        for future in as_completed(futures):
+            index = futures[future]
+            ordered[index] = future.result()
+        results = [item for item in ordered if item is not None]
+
+    print(json.dumps({"results": results}, indent=2), flush=True)

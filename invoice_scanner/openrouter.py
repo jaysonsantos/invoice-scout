@@ -3,6 +3,8 @@
 import base64
 import json
 import logging
+import os
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -33,14 +35,30 @@ class OpenRouterService:
     """Service for extracting data using OpenRouter."""
 
     API_URL = "https://openrouter.ai/api/v1/chat/completions"
-    MODEL = "mistralai/mistral-small-3.2-24b-instruct"
+    MODEL = "google/gemini-2.5-flash-lite"
 
-    def __init__(self, api_key: str, model: str | None = None):
+    def __init__(
+        self,
+        api_key: str,
+        model: str | None = None,
+        dump_enabled: bool = False,
+        dump_dir: Path | None = None,
+    ):
         self.api_key = api_key
         self.model = model or self.MODEL
+        self.last_usage: dict | None = None
+        self.last_headers: dict | None = None
+        self.dump_enabled = dump_enabled
+        self.dump_dir = dump_dir or Path("/tmp/invoice-scout")
+        app_url = os.getenv(
+            "OPENROUTER_APP_URL", "https://github.com/jaysonsantos/invoice-scout"
+        )
+        app_title = os.getenv("OPENROUTER_APP_TITLE", "InvoiceScout")
         self.headers = {
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
+            "HTTP-Referer": app_url,
+            "X-Title": app_title,
         }
         self.session = self._build_session()
 
@@ -63,11 +81,12 @@ class OpenRouterService:
         return session
 
     def extract_invoice_data(
-        self, pdf_content: bytes, file_name: str
+        self,
+        pdf_content: bytes,
+        file_name: str,
+        extracted_text: str | None = None,
     ) -> InvoiceExtract:
         """Extract invoice data from PDF using OpenRouter."""
-        pdf_base64 = base64.b64encode(pdf_content).decode("utf-8")
-
         required_keys = ", ".join(
             [
                 "invoice_number",
@@ -96,49 +115,78 @@ Important:
 
         schema = InvoiceExtract.model_json_schema()
 
+        messages = [
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": prompt}],
+            }
+        ]
+        if extracted_text is not None:
+            messages[0]["content"].append(
+                {
+                    "type": "text",
+                    "text": f"Extracted text:\n{extracted_text}",
+                }
+            )
+        else:
+            pdf_base64 = base64.b64encode(pdf_content).decode("utf-8")
+            messages[0]["content"].append(
+                {
+                    "type": "file",
+                    "file": {
+                        "filename": file_name,
+                        "file_data": f"data:application/pdf;base64,{pdf_base64}",
+                    },
+                }
+            )
+
+        max_tokens = 1000
+        if self.model.startswith("openai/gpt-5"):
+            max_tokens = 2000
+
         payload = {
             "model": self.model,
-            "messages": [
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": prompt},
-                        {
-                            "type": "file",
-                            "file": {
-                                "filename": file_name,
-                                "file_data": f"data:application/pdf;base64,{pdf_base64}",
-                            },
-                        },
-                    ],
-                }
-            ],
+            "messages": messages,
             "temperature": 0.1,
-            "max_tokens": 1000,
+            "max_tokens": max_tokens,
             "response_format": {
                 "type": "json_schema",
                 "json_schema": schema,
             },
         }
+        if self.model.startswith("openai/gpt-5"):
+            payload["reasoning"] = {"effort": "minimal"}
         if self.model.startswith("mistralai/"):
             payload.pop("response_format", None)
 
-        prompt_log_file = Path("/tmp/last_invoice_prompt.json")
-        self._log_prompt(prompt_log_file, file_name, prompt, schema, payload)
-
-        result = self._send_or_raise(payload)
+        dump_paths = self._dump_input(file_name, prompt, schema, payload)
+        result, headers = self._send_or_raise(payload)
         actual_model = result.get("model", "unknown")
         logger.info(f"OpenRouter used model: {actual_model} for {file_name}")
-        self._update_prompt_log(prompt_log_file, actual_model)
+        self._log_usage(result.get("usage"), headers)
+        self._dump_output(dump_paths, result, headers, actual_model)
 
         content = self._extract_content(result)
+        finish_reason = self._extract_finish_reason(result)
+        if finish_reason == "length":
+            logger.warning("Finish reason was length; retrying with higher max_tokens")
+            payload["max_tokens"] = max(payload["max_tokens"] * 2, 2000)
+        if not content.strip() or finish_reason == "length":
+            if not content.strip() and finish_reason != "length":
+                logger.warning("Empty content received; retrying once")
+            result, headers = self._send_or_raise(payload)
+            actual_model = result.get("model", actual_model)
+            logger.info(f"OpenRouter used model: {actual_model} for {file_name}")
+            self._log_usage(result.get("usage"), headers)
+            self._dump_output(dump_paths, result, headers, actual_model)
+            content = self._extract_content(result)
 
         extracted_data = self._parse_response_json(content)
         normalized_data = self._normalize_extracted_data(extracted_data)
         return self._validate_invoice(normalized_data)
 
-    def _send_request(self, payload: dict) -> dict:
-        """Send request to OpenRouter API and return response dict."""
+    def _send_request(self, payload: dict) -> tuple[dict, dict]:
+        """Send request to OpenRouter API and return response dict and headers."""
         response = self.session.post(
             self.API_URL, headers=self.headers, json=payload, timeout=120
         )
@@ -147,12 +195,15 @@ Important:
                 "OpenRouter error %s: %s", response.status_code, response.text.strip()
             )
         response.raise_for_status()
-        return response.json()
+        return response.json(), dict(response.headers)
 
-    def _send_or_raise(self, payload: dict) -> dict:
+    def _send_or_raise(self, payload: dict) -> tuple[dict, dict]:
         """Send request and wrap transport errors."""
         try:
-            return self._send_request(payload)
+            result = self._send_request(payload)
+            if isinstance(result, tuple):
+                return result
+            return result, {}
         except requests.RequestException as e:
             logger.exception(f"OpenRouter API error: {e}")
             raise ValueError(f"ERROR: {e}") from e
@@ -164,13 +215,53 @@ Important:
             raise ValueError("NO_CHOICES")
         return choices[0]["message"]["content"]
 
+    def _extract_finish_reason(self, result: dict) -> str | None:
+        """Extract finish reason from OpenRouter response."""
+        choices = result.get("choices", [])
+        if not choices:
+            return None
+        return choices[0].get("finish_reason") or choices[0].get("native_finish_reason")
+
+    def _log_usage(self, usage: dict | None, headers: dict) -> None:
+        """Log cost/token usage info when provided by OpenRouter."""
+        self.last_usage = usage
+        self.last_headers = headers
+        if usage:
+            cost = usage.get("cost")
+            prompt_tokens = usage.get("prompt_tokens")
+            completion_tokens = usage.get("completion_tokens")
+            total_tokens = usage.get("total_tokens")
+            logger.info(
+                "OpenRouter usage: cost=%s prompt_tokens=%s completion_tokens=%s total_tokens=%s",
+                cost,
+                prompt_tokens,
+                completion_tokens,
+                total_tokens,
+            )
+        header_keys = [
+            key
+            for key in headers
+            if key.lower().startswith("x-openrouter")
+            or key.lower().startswith("x-usage")
+            or key.lower().startswith("x-ratelimit")
+        ]
+        if header_keys:
+            logged = {key: headers.get(key) for key in header_keys}
+            logger.info("OpenRouter headers: %s", logged)
+
     def _parse_response_json(self, content: str) -> dict:
         """Parse JSON content from the model response."""
+        if not content or not content.strip():
+            logger.error("Raw content was empty or whitespace")
         try:
             return json.loads(strip_code_fences(content))
         except json.JSONDecodeError as e:
             logger.error(f"Failed to parse JSON response: {e}")
-            logger.error(f"Raw content that failed parsing:\n{content}")
+            logger.error(
+                "Raw content that failed parsing (length=%s):\n%r",
+                len(content),
+                content,
+            )
             raise ValueError("PARSE_ERROR") from e
 
     def _validate_invoice(self, extracted_data: dict) -> InvoiceExtract:
@@ -184,17 +275,22 @@ Important:
             )
             raise
 
-    def _log_prompt(
-        self,
-        prompt_log_file: Path,
-        file_name: str,
-        prompt: str,
-        schema: dict,
-        payload: dict,
-    ) -> None:
-        """Write prompt payload to a temp file for debugging."""
+    def _dump_input(
+        self, file_name: str, prompt: str, schema: dict, payload: dict
+    ) -> dict[str, Path] | None:
+        """Optionally dump input payload to disk for debugging."""
+        if not self.dump_enabled:
+            return None
+
+        timestamp = int(time.time())
+        slug = self.model.replace("/", "-")
+        self.dump_dir.mkdir(parents=True, exist_ok=True)
+        input_path = self._unique_dump_path(
+            self.dump_dir / f"{timestamp}-input-{slug}.json"
+        )
+
         try:
-            with open(prompt_log_file, "w") as f:
+            with open(input_path, "w") as f:
                 json.dump(
                     {
                         "model": self.model,
@@ -209,19 +305,54 @@ Important:
                     default=str,
                 )
         except (OSError, TypeError) as e:
-            logger.debug(f"Could not log prompt to file: {e}")
+            logger.debug(f"Could not dump input payload: {e}")
+            return None
 
-    def _update_prompt_log(self, prompt_log_file: Path, actual_model: str) -> None:
-        """Update prompt log with the model selected by OpenRouter."""
+        output_path = self._unique_dump_path(
+            self.dump_dir / f"{timestamp}-output-{slug}.json"
+        )
+        return {"input": input_path, "output": output_path}
+
+    def _dump_output(
+        self,
+        dump_paths: dict[str, Path] | None,
+        result: dict,
+        headers: dict,
+        actual_model: str,
+    ) -> None:
+        """Optionally dump output response to disk for debugging."""
+        if not dump_paths:
+            return
         try:
-            with open(prompt_log_file, "r+") as f:
-                log_data = json.load(f)
-                log_data["actual_model_used"] = actual_model
-                f.seek(0)
-                json.dump(log_data, f, indent=2, default=str)
-                f.truncate()
-        except (OSError, json.JSONDecodeError, TypeError) as e:
-            logger.debug(f"Could not update prompt log with model: {e}")
+            with open(dump_paths["output"], "w") as f:
+                json.dump(
+                    {
+                        "model": self.model,
+                        "actual_model": actual_model,
+                        "timestamp": datetime.now().isoformat(),
+                        "response": result,
+                        "headers": headers,
+                    },
+                    f,
+                    indent=2,
+                    default=str,
+                )
+        except (OSError, TypeError) as e:
+            logger.debug(f"Could not dump output response: {e}")
+
+    @staticmethod
+    def _unique_dump_path(path: Path) -> Path:
+        """Ensure the dump path is unique by appending a counter if needed."""
+        if not path.exists():
+            return path
+        stem = path.stem
+        suffix = path.suffix
+        counter = 1
+        while True:
+            candidate = path.with_name(f"{stem}-{counter}{suffix}")
+            if not candidate.exists():
+                return candidate
+            counter += 1
 
     def _normalize_extracted_data(self, extracted_data: dict) -> dict:
         """Normalize extracted data without introducing ambiguous fields."""

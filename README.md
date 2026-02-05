@@ -131,6 +131,9 @@ uv run main.py setup
 ```bash
 uv run main.py scan      # or just: uv run main.py
 ```
+```bash
+uv run invoice-scout scan --model openai/gpt-5-nano
+```
 
 ### Extract from a local PDF (no Sheets writes)
 ```bash
@@ -138,6 +141,9 @@ uv run invoice-scout local /path/to/invoice.pdf
 ```
 ```bash
 uv run invoice-scout local /path/to/invoice.pdf --model mistralai/mistral-small-3.2-24b-instruct
+```
+```bash
+uv run invoice-scout local /path/to/invoice.pdf --no-pdftotext
 ```
 
 ### Check configuration
@@ -245,6 +251,18 @@ Configuration is stored in `~/.invoice_scanner_state.json`:
 
 - **OpenRouter**: Check current pricing at openrouter.ai
 - **Google APIs**: Standard OAuth2 quota limits apply (typically 1000 requests/100 seconds)
+
+### Local Extraction Cost Comparison (pdftotext)
+
+Sample run over `/tmp/*.pdf` (7 files) using `--pdftotext`:
+
+- **Gemini Flash** total: `0.000827` (avg `0.000118` per file)
+- **Mistral Small 3.1** total: `0.002206` (avg `0.000315` per file)
+- **GPT-5 Nano** total: `0.000501` (avg `0.000072` per file)
+
+Notes/caveats:
+- Costs vary by model/provider, prompt length, and extracted text size. Treat these as illustrative snapshots.
+- `openai/gpt-5-nano` can return empty or truncated output without retries; this code retries when the finish reason is `length`, which improved reliability in our runs.
 
 ## Troubleshooting
 
