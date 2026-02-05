@@ -175,3 +175,28 @@ class TestOpenRouterService:
         from invoice_scanner import OpenRouterService
 
         assert OpenRouterService.MODEL == "google/gemini-2.5-flash-lite"
+
+
+def test_normalize_extracted_data_populates_fields():
+    from invoice_scanner.openrouter import EXTRA_FIELDS_KEY, OpenRouterService
+
+    service = OpenRouterService("test-key")
+    normalized = service._normalize_extracted_data(
+        {
+            "vendor_name": "Acme Co",
+            "line_items": [{"description": "Widgets"}],
+            "total_amount": 12.34,
+            "tax_amount": 1.23,
+            "currency": "€",
+            "invoice_date": "01.02.2026",
+            "notes": "paid by card",
+        }
+    )
+
+    assert normalized["company"] == "Acme Co"
+    assert normalized["product"] == "Widgets"
+    assert normalized["total_value"] == "12.34"
+    assert normalized["taxes_paid"] == "1.23"
+    assert normalized["currency"] == "EUR"
+    assert normalized["language"] == "de"
+    assert normalized[EXTRA_FIELDS_KEY]["notes"] == "paid by card"
