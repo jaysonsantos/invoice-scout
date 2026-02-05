@@ -132,6 +132,14 @@ uv run main.py setup
 uv run main.py scan      # or just: uv run main.py
 ```
 
+### Extract from a local PDF (no Sheets writes)
+```bash
+uv run invoice-scout local /path/to/invoice.pdf
+```
+```bash
+uv run invoice-scout local /path/to/invoice.pdf --model mistralai/mistral-small-3.2-24b-instruct
+```
+
 ### Check configuration
 ```bash
 uv run main.py status

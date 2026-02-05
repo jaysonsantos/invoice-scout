@@ -8,6 +8,8 @@ from pathlib import Path
 
 import requests
 from pydantic import ValidationError
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 from .config import DATE_DD_MM_YYYY_RE, InvoiceExtract
 from .utils import strip_code_fences
@@ -31,14 +33,34 @@ class OpenRouterService:
     """Service for extracting data using OpenRouter."""
 
     API_URL = "https://openrouter.ai/api/v1/chat/completions"
-    MODEL = "google/gemini-2.5-flash-lite"
+    MODEL = "mistralai/mistral-small-3.2-24b-instruct"
 
-    def __init__(self, api_key: str):
+    def __init__(self, api_key: str, model: str | None = None):
         self.api_key = api_key
+        self.model = model or self.MODEL
         self.headers = {
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
         }
+        self.session = self._build_session()
+
+    def _build_session(self) -> requests.Session:
+        """Create a requests session with retry/backoff."""
+        retry = Retry(
+            total=3,
+            connect=3,
+            read=3,
+            status=3,
+            backoff_factor=0.5,
+            status_forcelist=[429, 500, 502, 503, 504],
+            allowed_methods={"POST"},
+            raise_on_status=False,
+        )
+        adapter = HTTPAdapter(max_retries=retry)
+        session = requests.Session()
+        session.mount("https://", adapter)
+        session.mount("http://", adapter)
+        return session
 
     def extract_invoice_data(
         self, pdf_content: bytes, file_name: str
@@ -46,7 +68,20 @@ class OpenRouterService:
         """Extract invoice data from PDF using OpenRouter."""
         pdf_base64 = base64.b64encode(pdf_content).decode("utf-8")
 
-        prompt = """You are an expert invoice data extraction system. Analyze this invoice PDF and extract the required information. The invoice may be in English or German.
+        required_keys = ", ".join(
+            [
+                "invoice_number",
+                "invoice_date",
+                "company",
+                "product",
+                "total_value",
+                "currency",
+                "taxes_paid",
+                "language",
+            ]
+        )
+
+        prompt = f"""You are an expert invoice data extraction system. Analyze this invoice PDF and extract the required information. The invoice may be in English or German.
 
 Important:
 - If any field is not found, use "N/A"
@@ -54,12 +89,14 @@ Important:
 - Extract numeric values only, remove currency symbols
 - Total should be the final amount including taxes
 - Tax amount is the VAT/sales tax paid
+- Return ONLY a JSON object with keys: {required_keys}
+- Do not wrap the JSON in code fences
 """
 
         schema = InvoiceExtract.model_json_schema()
 
         payload = {
-            "model": self.MODEL,
+            "model": self.model,
             "messages": [
                 {
                     "role": "user",
@@ -82,6 +119,8 @@ Important:
                 "json_schema": schema,
             },
         }
+        if self.model.startswith("mistralai/"):
+            payload.pop("response_format", None)
 
         prompt_log_file = Path("/tmp/last_invoice_prompt.json")
         self._log_prompt(prompt_log_file, file_name, prompt, schema, payload)
@@ -99,9 +138,13 @@ Important:
 
     def _send_request(self, payload: dict) -> dict:
         """Send request to OpenRouter API and return response dict."""
-        response = requests.post(
+        response = self.session.post(
             self.API_URL, headers=self.headers, json=payload, timeout=120
         )
+        if not response.ok:
+            logger.error(
+                "OpenRouter error %s: %s", response.status_code, response.text.strip()
+            )
         response.raise_for_status()
         return response.json()
 
@@ -153,7 +196,7 @@ Important:
             with open(prompt_log_file, "w") as f:
                 json.dump(
                     {
-                        "model": self.MODEL,
+                        "model": self.model,
                         "file_name": file_name,
                         "timestamp": datetime.now().isoformat(),
                         "prompt": prompt,
@@ -184,9 +227,13 @@ Important:
         normalized = dict(extracted_data)
 
         if not normalized.get("company"):
-            vendor_details = normalized.get("vendor_details")
-            if isinstance(vendor_details, dict) and vendor_details.get("name"):
-                normalized["company"] = vendor_details.get("name")
+            vendor_name = normalized.get("vendor_name")
+            if isinstance(vendor_name, str) and vendor_name.strip():
+                normalized["company"] = vendor_name.strip()
+            else:
+                vendor_details = normalized.get("vendor_details")
+                if isinstance(vendor_details, dict) and vendor_details.get("name"):
+                    normalized["company"] = vendor_details.get("name")
 
         if not normalized.get("product"):
             line_items = normalized.get("line_items")
@@ -206,6 +253,11 @@ Important:
             and normalized.get("tax_amount") is not None
         ):
             normalized["taxes_paid"] = str(normalized.get("tax_amount"))
+
+        for key in ("total_value", "taxes_paid"):
+            value = normalized.get(key)
+            if value is not None and not isinstance(value, str):
+                normalized[key] = str(value)
 
         if not normalized.get("language"):
             invoice_date = normalized.get("invoice_date", "")

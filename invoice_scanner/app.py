@@ -1,9 +1,11 @@
 """Main application logic for invoice scanning."""
 
+import json
 import logging
 from concurrent.futures import ThreadPoolExecutor as PoolExecutor
 from concurrent.futures import as_completed
 from datetime import datetime
+from pathlib import Path
 
 import click
 from google.oauth2.credentials import Credentials
@@ -278,3 +280,36 @@ def scan_command(ctx: click.Context) -> None:
     if not config:
         return
     _run_scan(config, state)
+
+
+@main.command("local")
+@click.argument(
+    "pdf_path", type=click.Path(exists=True, dir_okay=False, path_type=Path)
+)
+@click.option(
+    "--model",
+    "model_name",
+    default=None,
+    help="Override OpenRouter model ID for this run.",
+)
+def local_command(pdf_path: Path, model_name: str | None) -> None:
+    """Extract invoice data from a local PDF without writing to Sheets."""
+    state = State.load()
+    config = _load_config(state)
+    if not config:
+        return
+
+    try:
+        pdf_content = pdf_path.read_bytes()
+    except OSError as e:
+        print(f"❌ Failed to read {pdf_path}: {e}", flush=True)
+        return
+
+    service = OpenRouterService(config.openrouter_api_key, model=model_name)
+    try:
+        extracted = service.extract_invoice_data(pdf_content, pdf_path.name)
+    except ValueError as e:
+        print(f"❌ Extraction failed: {e}", flush=True)
+        return
+
+    print(json.dumps(extracted.model_dump(), indent=2), flush=True)
