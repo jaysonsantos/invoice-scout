@@ -58,6 +58,9 @@ class InvoiceProcessor:
         except HttpError as e:
             logger.exception(f"Failed to download {file_info['name']}: {e}")
             return None
+        except Exception as e:
+            logger.exception(f"Unexpected error downloading {file_info['name']}: {e}")
+            return None
 
     def _extract_invoice(
         self, pdf_content: bytes, file_info: dict
@@ -111,7 +114,11 @@ class InvoiceProcessor:
 
             for future in as_completed(futures):
                 file_info = futures[future]
-                invoice = future.result()
+                try:
+                    invoice = future.result()
+                except Exception as e:
+                    logger.exception(f"Failed to process {file_info['name']}: {e}")
+                    continue
                 if not invoice:
                     continue
 

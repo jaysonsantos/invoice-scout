@@ -89,6 +89,7 @@ Important:
 - Extract numeric values only, remove currency symbols
 - Total should be the final amount including taxes
 - Tax amount is the VAT/sales tax paid
+- invoice_date must be formatted as YYYY-MM-DD
 - Return ONLY a JSON object with keys: {required_keys}
 - Do not wrap the JSON in code fences
 """

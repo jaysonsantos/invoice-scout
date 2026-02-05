@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import re
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -58,8 +59,14 @@ class InvoiceExtract(BaseModel):
         yyyy_mm_dd = DATE_YYYY_MM_DD_RE.match(value)
         if yyyy_mm_dd:
             return value
+        for fmt in ("%B %d, %Y", "%b %d, %Y"):
+            try:
+                parsed = datetime.strptime(value, fmt)
+                return parsed.strftime("%Y-%m-%d")
+            except ValueError:
+                continue
 
-        return value
+        raise ValueError("Invoice date must be in YYYY-MM-DD format")
 
     @field_validator(
         "company", "product", "language", "total_value", "currency", mode="before"

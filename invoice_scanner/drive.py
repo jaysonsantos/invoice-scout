@@ -1,6 +1,7 @@
 """Google Drive service wrapper."""
 
 import logging
+import time
 
 from google.oauth2.credentials import Credentials
 from googleapiclient.errors import HttpError
@@ -128,14 +129,31 @@ class GoogleDriveService:
 
     def download_pdf(self, file_id: str) -> bytes:
         """Download a PDF file from Google Drive."""
-        request = self.service.files().get_media(fileId=file_id)
         from io import BytesIO
 
-        fh = BytesIO()
-        downloader = MediaIoBaseDownload(fh, request)
+        max_attempts = 3
+        for attempt in range(1, max_attempts + 1):
+            try:
+                request = self.service.files().get_media(fileId=file_id)
+                fh = BytesIO()
+                downloader = MediaIoBaseDownload(fh, request)
 
-        done = False
-        while not done:
-            _, done = downloader.next_chunk()
+                done = False
+                while not done:
+                    _, done = downloader.next_chunk()
 
-        return fh.getvalue()
+                return fh.getvalue()
+            except Exception as e:
+                if attempt == max_attempts:
+                    raise
+                backoff = 0.5 * (2 ** (attempt - 1))
+                logger.warning(
+                    "Download attempt %s for file %s failed: %s. Retrying in %.1fs",
+                    attempt,
+                    file_id,
+                    e,
+                    backoff,
+                )
+                time.sleep(backoff)
+
+        raise RuntimeError("Failed to download PDF after retries")
