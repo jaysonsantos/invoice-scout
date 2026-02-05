@@ -1,11 +1,11 @@
 """Main application logic for invoice scanning."""
 
-import argparse
 import logging
 from concurrent.futures import ThreadPoolExecutor as PoolExecutor
 from concurrent.futures import as_completed
 from datetime import datetime
 
+import click
 from google.oauth2.credentials import Credentials
 from googleapiclient.errors import HttpError
 from pydantic import ValidationError
@@ -203,61 +203,78 @@ def _run_scan(config: Config, state: State) -> None:
     processor.run()
 
 
-def main() -> None:
+def _load_state(ctx: click.Context) -> None:
+    """Load shared state into the Click context."""
+    ctx.ensure_object(dict)
+    if "state" not in ctx.obj:
+        ctx.obj["state"] = State.load()
+
+
+@click.group(
+    invoke_without_command=True,
+    help="InvoiceScout - Extract data from PDF invoices in Google Drive",
+)
+@click.option(
+    "-v",
+    "--verbose",
+    is_flag=True,
+    help="Enable DEBUG level logging",
+)
+@click.pass_context
+def main(ctx: click.Context, verbose: bool) -> None:
     """Main entry point with CLI."""
-    parser = argparse.ArgumentParser(
-        description="InvoiceScout - Extract data from PDF invoices in Google Drive",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  uv run main.py auth           # Authenticate with Google (OAuth2)
-  uv run main.py setup          # Run interactive setup wizard
-  uv run main.py scan           # Scan invoices (after setup)
-  uv run main.py status         # Show current configuration
-  uv run main.py reset          # Reset saved configuration
-        """,
-    )
-
-    parser.add_argument(
-        "command",
-        choices=["auth", "setup", "scan", "status", "reset"],
-        nargs="?",
-        default="scan",
-        help="Command to run (default: scan)",
-    )
-
-    parser.add_argument(
-        "-v",
-        "--verbose",
-        action="store_true",
-        help="Enable DEBUG level logging",
-    )
-
-    args = parser.parse_args()
-
-    log_level = logging.DEBUG if args.verbose else logging.INFO
+    log_level = logging.DEBUG if verbose else logging.INFO
     logging.basicConfig(level=log_level)
-    state = State.load()
+    _load_state(ctx)
 
-    if args.command == "reset":
-        _reset_config()
-        return
+    if ctx.invoked_subcommand is None:
+        state = ctx.obj["state"]
+        config = _load_config(state)
+        if not config:
+            return
+        _run_scan(config, state)
 
-    if args.command == "status":
-        _show_status()
-        return
 
+@main.command("reset")
+def reset_command() -> None:
+    """Reset saved configuration."""
+    _reset_config()
+
+
+@main.command("status")
+def status_command() -> None:
+    """Show current configuration."""
+    _show_status()
+
+
+@main.command("auth")
+@click.pass_context
+def auth_command(ctx: click.Context) -> None:
+    """Authenticate with Google (OAuth2)."""
+    state = ctx.obj["state"]
     config = _load_config(state)
     if not config:
         return
+    authenticate_command(config)
 
-    if args.command == "auth":
-        authenticate_command(config)
+
+@main.command("setup")
+@click.pass_context
+def setup_command(ctx: click.Context) -> None:
+    """Run interactive setup wizard."""
+    state = ctx.obj["state"]
+    config = _load_config(state)
+    if not config:
         return
+    _run_setup(config)
 
-    if args.command == "setup":
-        _run_setup(config)
+
+@main.command("scan")
+@click.pass_context
+def scan_command(ctx: click.Context) -> None:
+    """Scan invoices after setup."""
+    state = ctx.obj["state"]
+    config = _load_config(state)
+    if not config:
         return
-
-    if args.command == "scan":
-        _run_scan(config, state)
+    _run_scan(config, state)

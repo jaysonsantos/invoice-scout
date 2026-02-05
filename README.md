@@ -97,6 +97,27 @@ This interactive wizard will:
 
 ## Usage
 
+### CLI help
+```bash
+uv run invoice-scout --help
+```
+```text
+Usage: invoice-scout [OPTIONS] COMMAND [ARGS]...
+
+  InvoiceScout - Extract data from PDF invoices in Google Drive
+
+Options:
+  -v, --verbose  Enable DEBUG level logging
+  --help         Show this message and exit.
+
+Commands:
+  auth    Authenticate with Google (OAuth2).
+  reset   Reset saved configuration.
+  scan    Scan invoices after setup.
+  setup   Run interactive setup wizard.
+  status  Show current configuration.
+```
+
 ### First time setup
 ```bash
 # 1. Authenticate (one-time)
@@ -123,8 +144,9 @@ uv run main.py reset
 
 ### Alternative entrypoints
 ```bash
-uv run scan-invoices setup    # After installing the package
+uv run invoice-scout setup    # After installing the package
 uv run python -m invoice_scanner setup
+uv run invoice-scout --help
 ```
 
 ## How It Works

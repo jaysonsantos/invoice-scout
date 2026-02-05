@@ -5,6 +5,7 @@ description = "InvoiceScout - scan Drive invoices, extract data with OpenRouter,
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
+    "click>=8.1.7",
     "google-auth>=2.22.0",
     "google-auth-oauthlib>=1.0.0",
     "google-auth-httplib2>=0.1.1",
@@ -16,7 +17,7 @@ dependencies = [
 ]
 
 [project.scripts]
-scan-invoices = "invoice_scanner:main"
+invoice-scout = "invoice_scanner:main"
 
 [build-system]
 requires = ["hatchling"]
