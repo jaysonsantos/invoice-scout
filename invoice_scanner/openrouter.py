@@ -31,6 +31,22 @@ ALLOWED_SCHEMA_KEYS = {
 EXTRA_FIELDS_KEY = "extra_fields"
 
 
+def build_invoice_prompt(required_keys: str) -> str:
+    """Build the extraction prompt shared across model backends."""
+    return f"""You are an expert invoice data extraction system. Analyze this invoice PDF and extract the required information. The invoice may be in English or German.
+
+Important:
+- If any field is not found, use "N/A"
+- For German invoices, be aware of terms like "Rechnungsnummer", "Rechnungsdatum", "Gesamtbetrag", "MwSt", "USt"
+- Extract numeric values only, remove currency symbols
+- Total should be the final amount including taxes
+- Tax amount is the VAT/sales tax paid
+- invoice_date must be formatted as YYYY-MM-DD
+- Return ONLY a JSON object with keys: {required_keys}
+- Do not wrap the JSON in code fences
+"""
+
+
 class OpenRouterService:
     """Service for extracting data using OpenRouter."""
 
@@ -100,18 +116,7 @@ class OpenRouterService:
             ]
         )
 
-        prompt = f"""You are an expert invoice data extraction system. Analyze this invoice PDF and extract the required information. The invoice may be in English or German.
-
-Important:
-- If any field is not found, use "N/A"
-- For German invoices, be aware of terms like "Rechnungsnummer", "Rechnungsdatum", "Gesamtbetrag", "MwSt", "USt"
-- Extract numeric values only, remove currency symbols
-- Total should be the final amount including taxes
-- Tax amount is the VAT/sales tax paid
-- invoice_date must be formatted as YYYY-MM-DD
-- Return ONLY a JSON object with keys: {required_keys}
-- Do not wrap the JSON in code fences
-"""
+        prompt = build_invoice_prompt(required_keys)
 
         schema = InvoiceExtract.model_json_schema()
 

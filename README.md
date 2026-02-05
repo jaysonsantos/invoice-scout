@@ -145,6 +145,9 @@ uv run invoice-scout local /path/to/invoice.pdf --model mistralai/mistral-small-
 ```bash
 uv run invoice-scout local /path/to/invoice.pdf --no-pdftotext
 ```
+```bash
+uv run invoice-scout local /path/to/invoice.pdf --model ollama/ministral-3:latest --pivot
+```
 
 ### Check configuration
 ```bash
