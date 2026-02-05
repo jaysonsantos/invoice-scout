@@ -9,6 +9,7 @@ from datetime import datetime
 from pathlib import Path
 
 import click
+import requests
 from google.oauth2.credentials import Credentials
 from googleapiclient.errors import HttpError
 from pydantic import ValidationError
@@ -17,7 +18,7 @@ from .cli import setup_wizard
 from .config import Config, InvoiceExtract, State
 from .drive import GoogleDriveService
 from .oauth import OAuth2Manager
-from .openrouter import OpenRouterService
+from .openrouter import OpenRouterService, build_invoice_prompt
 from .sheets import GoogleSheetsService
 
 logger = logging.getLogger(__name__)
@@ -343,7 +344,13 @@ def scan_command(ctx: click.Context) -> None:
     "--model",
     "model_names",
     multiple=True,
-    help="OpenRouter model ID (repeatable for A/B runs).",
+    help="Model ID (repeatable for A/B runs). Use ollama/<model> for local.",
+)
+@click.option(
+    "--ollama-url",
+    default="http://localhost:11434",
+    show_default=True,
+    help="Ollama server base URL.",
 )
 @click.option(
     "--dump",
@@ -363,12 +370,19 @@ def scan_command(ctx: click.Context) -> None:
     show_default=True,
     help="Extract text with pdftotext and send text instead of PDF bytes.",
 )
+@click.option(
+    "--pivot",
+    is_flag=True,
+    help="Print results in a pivot table with models as columns.",
+)
 def local_command(
     pdf_path: Path,
     model_names: tuple[str, ...],
+    ollama_url: str,
     dump: bool,
     dump_dir: Path,
     pdftotext: bool,
+    pivot: bool,
 ) -> None:
     """Extract invoice data from a local PDF without writing to Sheets."""
     state = State.load()
@@ -383,7 +397,8 @@ def local_command(
         return
 
     extracted_text: str | None = None
-    if pdftotext:
+    uses_ollama = any(name.startswith("ollama/") for name in model_names)
+    if pdftotext or uses_ollama:
         try:
             result = subprocess.run(
                 ["pdftotext", str(pdf_path), "-"],
@@ -419,16 +434,130 @@ def local_command(
         }
 
     results: list[dict] = []
-    max_workers = min(len(models), 4)
-    with PoolExecutor(max_workers=max_workers) as executor:
-        futures = {
-            executor.submit(_run_model, model_name): index
-            for index, model_name in enumerate(models)
+    max_workers = min(len(models), 4) or 1
+
+    def _run_ollama(model_name: str) -> dict:
+        if extracted_text is None:
+            return {
+                "model": f"ollama/{model_name}",
+                "error": "pdftotext is required for ollama models",
+            }
+        required_keys = ", ".join(
+            [
+                "invoice_number",
+                "invoice_date",
+                "company",
+                "product",
+                "total_value",
+                "currency",
+                "taxes_paid",
+                "language",
+            ]
+        )
+        prompt = build_invoice_prompt(required_keys)
+        body = {
+            "model": model_name,
+            "prompt": f"{prompt}\nExtracted text:\n{extracted_text}",
+            "stream": False,
+            "format": "json",
         }
+        try:
+            response = requests.post(
+                f"{ollama_url.rstrip('/')}/api/generate",
+                json=body,
+                timeout=120,
+            )
+            response.raise_for_status()
+            payload = response.json()
+            content = payload.get("response", "")
+            data = json.loads(content)
+            return {
+                "model": f"ollama/{model_name}",
+                "invoice": data,
+                "usage": None,
+                "headers": None,
+            }
+        except (requests.RequestException, json.JSONDecodeError, ValueError) as e:
+            return {"model": f"ollama/{model_name}", "error": str(e)}
+
+    with PoolExecutor(max_workers=max_workers) as executor:
+        futures = {}
         ordered: list[dict | None] = [None] * len(models)
+        for index, model_name in enumerate(models):
+            if model_name and model_name.startswith("ollama/"):
+                futures[
+                    executor.submit(_run_ollama, model_name.removeprefix("ollama/"))
+                ] = index
+            else:
+                futures[executor.submit(_run_model, model_name)] = index
         for future in as_completed(futures):
             index = futures[future]
             ordered[index] = future.result()
         results = [item for item in ordered if item is not None]
 
-    print(json.dumps({"results": results}, indent=2), flush=True)
+    output = {"results": results}
+    if pivot:
+        print(_format_pivot(results), flush=True)
+    else:
+        print(json.dumps(output, indent=2), flush=True)
+
+
+def _format_pivot(results: list[dict]) -> str:
+    """Format results as a pivot table with models as columns."""
+    fields = [
+        "invoice_number",
+        "invoice_date",
+        "company",
+        "product",
+        "total_value",
+        "currency",
+        "taxes_paid",
+        "language",
+        "api_cost",
+    ]
+    header = ["model", *fields]
+    rows = []
+    for item in results:
+        model_name = item.get("model", "unknown")
+        if "error" in item:
+            rows.append([model_name, *[f"ERROR: {item['error']}"] * len(fields)])
+            continue
+        invoice = item.get("invoice", {})
+        usage = item.get("usage") or {}
+        cost = usage.get("cost")
+        cost_str = ""
+        if cost is not None:
+            try:
+                cost_str = f"{float(cost):.6f}"
+            except (TypeError, ValueError):
+                cost_str = str(cost)
+        row = [
+            model_name,
+            str(invoice.get("invoice_number", "")),
+            str(invoice.get("invoice_date", "")),
+            str(invoice.get("company", "")),
+            str(invoice.get("product", "")),
+            str(invoice.get("total_value", "")),
+            str(invoice.get("currency", "")),
+            str(invoice.get("taxes_paid", "")),
+            str(invoice.get("language", "")),
+            cost_str,
+        ]
+        rows.append(row)
+
+    col_widths = [
+        max(len(str(cell)) for cell in column)
+        for column in zip(header, *rows, strict=False)
+    ]
+    lines = []
+    header_line = " | ".join(
+        str(cell).ljust(col_widths[idx]) for idx, cell in enumerate(header)
+    )
+    sep_line = "-+-".join("-" * col_widths[idx] for idx in range(len(header)))
+    lines.append(header_line)
+    lines.append(sep_line)
+    for row in rows:
+        lines.append(
+            " | ".join(str(cell).ljust(col_widths[idx]) for idx, cell in enumerate(row))
+        )
+    return "\n".join(lines)
