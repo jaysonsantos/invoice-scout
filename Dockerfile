@@ -1,4 +1,4 @@
-FROM python:3.11-alpine AS builder
+FROM python:3.14-alpine AS builder
 
 WORKDIR /app
 
@@ -11,7 +11,7 @@ RUN uv sync --frozen --no-dev
 COPY invoice_scanner /app/invoice_scanner
 RUN python -m compileall -q /app/invoice_scanner
 
-FROM python:3.11-alpine
+FROM python:3.14-alpine
 
 WORKDIR /app
 
